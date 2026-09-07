@@ -1,440 +1,615 @@
 # VigilEye
 
-**Real-time multimodal driver drowsiness, fatigue & distraction detection**
-Smart India Hackathon 2026
+### Real-Time Driver Drowsiness, Fatigue and Distraction Detection
 
-A camera-only driver monitoring system that fuses eye closure, yawning, head
-pose, gaze and object cues into one stable state: **ALERT**, **DROWSY** or
-**DISTRACTED**.
+VigilEye is a camera-based driver monitoring system that analyses facial landmarks, eye closure, yawning, head pose, gaze direction, phone usage, and hands-on-wheel behaviour to detect potential driver drowsiness and distraction.
 
----
+The system combines real-time computer vision, rule-based sensor fusion, temporal analysis, audio alerts, event logging, and a browser-based monitoring dashboard.
 
-## Table of contents
+The project is designed for driver safety applications and edge-device deployment.
 
-1. [How it works](#1-how-it-works)
-2. [Install](#2-install)
-3. [Run it (15 minutes to a working demo)](#3-run-it)
-4. [Tuning](#4-tuning)
-5. [Datasets](#5-datasets)
-6. [Training the v2 fusion model](#6-training-the-v2-fusion-model)
-7. [Evaluation](#7-evaluation)
-8. [Fleet dashboard](#8-fleet-dashboard)
-9. [Edge deployment](#9-edge-deployment)
-10. [Build schedule](#10-build-schedule)
-11. [Demo script](#11-demo-script)
-12. [Known limitations](#12-known-limitations)
-13. [File map](#13-file-map)
+## Features
 
----
+* **Real-Time Driver Monitoring**
+  Processes live camera input and analyses driver behaviour.
 
-## 1. How it works
+* **Drowsiness Detection**
+  Detects eye closure, prolonged eye closure, micro-sleeps, and yawning.
 
+* **Distraction Detection**
+  Identifies sustained head turns, off-road gaze, phone usage, and hands-off-wheel behaviour.
+
+* **Head Pose Estimation**
+  Tracks yaw, pitch, and roll to identify head movement and potential distraction.
+
+* **Gaze Estimation**
+  Estimates eye direction and tracks sustained off-road gaze.
+
+* **Phone Detection**
+  Uses YOLOv8n to detect phone usage.
+
+* **Hands-on-Wheel Detection**
+  Uses MediaPipe Hands and a defined wheel region of interest.
+
+* **Driver-Specific Calibration**
+  Establishes a baseline during a 10-second calibration period.
+
+* **Rule-Based Fusion**
+  Combines multiple behavioural signals into stable driver states.
+
+* **Temporal Fusion**
+  Supports an LSTM/GRU-based temporal model for future learned fusion.
+
+* **Audio Alerts**
+  Provides escalating alerts with cooldown and escalation controls.
+
+* **Browser-Based Command Deck**
+  Displays live video, metrics, charts, alerts, and session information.
+
+* **Event Logging**
+  Stores frame-level data in CSV and event data in SQLite.
+
+* **Fleet Analytics Dashboard**
+  Provides historical session analysis using Streamlit.
+
+* **Optional Raspberry Pi Pico Integration**
+  Supports serial communication with external hardware for warning signals.
+
+## Driver States
+
+VigilEye classifies the current driver state into four categories:
+
+| State          | Description                                                   |
+| -------------- | ------------------------------------------------------------- |
+| **ALERT**      | Driver is not currently showing significant unsafe behaviour. |
+| **DROWSY**     | Behaviour indicates possible drowsiness or fatigue.           |
+| **DISTRACTED** | Behaviour indicates possible distraction.                     |
+| **NO_DRIVER**  | No driver is detected in the camera view.                     |
+
+Drowsiness and distraction are evaluated separately because they require different safety responses.
+
+## System Architecture
+
+```mermaid
+flowchart TB
+    A[Camera / Video File] --> B[VideoStream]
+    B --> C[VigilEye Pipeline]
+
+    C --> D[Face Mesh Detection]
+    C --> E[Phone Detection]
+    C --> F[Hands-on-Wheel Detection]
+
+    D --> G[Eye Metrics]
+    D --> H[Mouth Metrics]
+    D --> I[Head Pose]
+    D --> J[Gaze Estimation]
+
+    G --> K[EAR / Blink / PERCLOS]
+    H --> L[MAR / Yawn Detection]
+    I --> M[Nod / Head Turn Detection]
+    J --> N[Off-Road Gaze]
+
+    E --> O[Phone Presence]
+    F --> P[Hands-Off-Wheel]
+
+    K --> Q[Signals]
+    L --> Q
+    M --> Q
+    N --> Q
+    O --> Q
+    P --> Q
+
+    Q --> R[Rule-Based Fusion]
+    R --> S[Driver State]
+
+    S --> T[Audio Alerts]
+    S --> U[SQLite / CSV Logging]
+    S --> V[Telemetry Hub]
+    S --> W[Raspberry Pi Pico]
+
+    V --> X[Browser Command Deck]
+    U --> Y[Streamlit Fleet Dashboard]
 ```
-                    ┌──────────────────────────────────────┐
-   dashboard cam →  │  MediaPipe Face Mesh (478 landmarks) │
-                    └───────────────┬──────────────────────┘
-                                    │
-        ┌───────────┬───────────────┼───────────────┬────────────┐
-        ▼           ▼               ▼               ▼            ▼
-     EAR/PERCLOS  MAR/yawn     solvePnP head    iris gaze    YOLOv8n phone
-     blinks       detection    yaw/pitch/roll   h/v ratio    + MediaPipe Hands
-     microsleep                nod / turn       eyes-off     hands-off-wheel
-        │           │               │               │            │
-        └───────────┴───────────────┼───────────────┴────────────┘
-                                    ▼
-                    ┌──────────────────────────────────────┐
-                    │  FUSION                              │
-                    │  v1 weighted rules  (works day one)  │
-                    │  v2 LSTM over 30-frame windows       │
-                    │  hybrid = blend of both              │
-                    │  + hysteresis / dwell-time gating    │
-                    └───────────────┬──────────────────────┘
-                                    ▼
-                    ALERT · DROWSY · DISTRACTED · NO_DRIVER
-                                    │
-                    ┌───────────────┴──────────────────────┐
-                    ▼                                      ▼
-            escalating audio-visual alerts      SQLite event log → dashboard
+
+The pipeline produces a structured `Signals` record for each frame. These signals are then processed by the fusion layer before being sent to alerts, logging, hardware signalling, and the web interface.
+
+## Application Workflow
+
+```mermaid
+flowchart TD
+    A[Start Application] --> B[Open Camera / Video]
+    B --> C[Capture Frame]
+    C --> D{Calibration Available?}
+
+    D -->|No| E[10-Second Driver Calibration]
+    D -->|Yes| F[Load Existing Calibration]
+
+    E --> G[Run Perception Pipeline]
+    F --> G
+
+    G --> H[Extract Behavioural Signals]
+    H --> I[Calculate Drowsiness Score]
+    H --> J[Calculate Distraction Score]
+
+    I --> K[Rule-Based Fusion]
+    J --> K
+
+    K --> L[Apply Hysteresis]
+    L --> M[Determine Driver State]
+
+    M --> N[Update Dashboard]
+    M --> O[Generate Alerts]
+    M --> P[Log Event]
+    M --> Q[Send State to Pico]
+
+    N --> R{Continue Monitoring?}
+    O --> R
+    P --> R
+    Q --> R
+
+    R -->|Yes| C
+    R -->|No| S[Stop Application]
 ```
 
-### The three decisions that matter
+## Detection Pipeline
 
-**Separate drowsy and distract scores, not one "risk" number.**
-They demand opposite interventions — a drowsy driver must stop and rest, a
-distracted driver must look up *now*. Collapsing them destroys the most
-useful thing the system knows.
+```mermaid
+flowchart LR
+    A[Video Frame] --> B[Face Mesh]
+    B --> C[Facial Landmarks]
 
-**Per-driver calibration instead of fixed thresholds.**
-A hard-coded EAR of 0.21 is the biggest false-positive source in published
-systems. Eye aperture varies enormously between people; drivers with narrow
-eyes or glasses sit permanently below threshold. Ten seconds of baseline
-capture personalises the thresholds *and* captures camera placement, without
-which head-pose thresholds are meaningless.
+    C --> D[Eye Analysis]
+    C --> E[Mouth Analysis]
+    C --> F[Head Pose]
+    C --> G[Gaze Analysis]
 
-**Hysteresis on every state change.**
-8 confirming frames to enter an unsafe state, 20 to leave it, 1.5 s minimum
-dwell. This is the difference between a system drivers use and one they
-unplug. There is an explicit regression test asserting a single bad frame
-cannot flip the output.
+    D --> H[Eye Closure / Blinks / PERCLOS]
+    E --> I[Yawning]
+    F --> J[Nods / Head Turns]
+    G --> K[Off-Road Gaze]
 
----
+    A --> L[YOLOv8n]
+    L --> M[Phone Detection]
 
-## 2. Install
+    A --> N[MediaPipe Hands]
+    N --> O[Hands-on-Wheel Detection]
+
+    H --> P[Signals]
+    I --> P
+    J --> P
+    K --> P
+    M --> P
+    O --> P
+
+    P --> Q[Fusion]
+```
+
+## Signal Processing
+
+VigilEye extracts multiple behavioural signals from each frame.
+
+| Signal                    | Purpose                                               |
+| ------------------------- | ----------------------------------------------------- |
+| **EAR**                   | Measures eye openness.                                |
+| **PERCLOS**               | Tracks the proportion of time the eyes remain closed. |
+| **Blink Rate**            | Measures blinking frequency.                          |
+| **Micro-Sleep Detection** | Identifies prolonged eye closure.                     |
+| **MAR**                   | Measures mouth opening.                               |
+| **Yawn Detection**        | Identifies sustained yawning.                         |
+| **Head Pose**             | Estimates yaw, pitch, and roll.                       |
+| **Nod Detection**         | Detects head drops.                                   |
+| **Head Turn Detection**   | Detects sustained head turns.                         |
+| **Gaze Estimation**       | Tracks eye direction.                                 |
+| **Phone Detection**       | Detects phone presence.                               |
+| **Hands-on-Wheel**        | Checks whether hands remain within the wheel region.  |
+
+These signals are combined into a single per-frame record before fusion.
+
+## Fusion and State Management
+
+The fusion layer combines the extracted signals into drowsiness and distraction scores.
+
+```mermaid
+flowchart TD
+    A[Signals] --> B[Drowsiness Score]
+    A --> C[Distraction Score]
+
+    B --> D[Rule-Based Fusion]
+    C --> D
+
+    D --> E{State Transition}
+
+    E -->|Unsafe Conditions| F[Confirm Frames]
+    E -->|Safe Conditions| G[Release Frames]
+
+    F --> H[DROWSY / DISTRACTED]
+    G --> I[ALERT]
+
+    H --> J[Minimum State Duration]
+    I --> J
+
+    J --> K[Final Driver State]
+```
+
+The system uses **hysteresis** to reduce unstable state changes. The documented configuration requires 8 confirming frames to enter an unsafe state, 20 frames to leave it, and a minimum state duration of 1.5 seconds.
+
+## Calibration
+
+VigilEye uses driver-specific calibration instead of relying only on fixed thresholds.
+
+```mermaid
+flowchart TD
+    A[Start Calibration] --> B[Driver Looks Straight Ahead]
+    B --> C[Capture Baseline Measurements]
+    C --> D[Calculate Personal Thresholds]
+    D --> E[Save calibration.json]
+    E --> F[Begin Monitoring]
+```
+
+The calibration process runs for 10 seconds and stores the baseline in `calibration.json`.
+
+## Web Interface
+
+The browser-based **Command Deck** provides a live monitoring interface.
+
+```mermaid
+flowchart LR
+    A[VigilEye Pipeline] --> B[TelemetryHub]
+    B --> C[Web Server]
+
+    C --> D[Live MJPEG Video]
+    C --> E[Telemetry API]
+    C --> F[Alert Feed]
+    C --> G[Incident Log]
+    C --> H[Charts]
+    C --> I[Session Controls]
+
+    D --> J[Browser Dashboard]
+    E --> J
+    F --> J
+    G --> J
+    H --> J
+    I --> J
+```
+
+The interface includes live annotated video, metrics, charts, alert information, incident history, and session controls.
+
+## Raspberry Pi Pico Integration
+
+The Raspberry Pi Pico is an **optional external alerting device**.
+
+```mermaid
+flowchart LR
+    A[VigilEye Host] --> B[Serial Communication]
+    B --> C[Raspberry Pi Pico]
+    C --> D[External Alert Hardware]
+```
+
+The host sends driver-state strings over a serial connection. The Pico can be used to control external warning hardware such as LEDs, a buzzer, or other alerting components.
+
+The host-side serial integration is implemented, while the firmware still needs to be committed and flashed to the board.
+
+## Tech Stack
+
+| Technology              | Purpose                           |
+| ----------------------- | --------------------------------- |
+| **Python**              | Core application development      |
+| **OpenCV**              | Camera capture and visualisation  |
+| **MediaPipe Face Mesh** | Facial landmark detection         |
+| **MediaPipe Hands**     | Hands-on-wheel detection          |
+| **YOLOv8n**             | Phone detection                   |
+| **PyTorch**             | CNN and temporal model support    |
+| **MobileNetV3-Small**   | Drowsiness classification model   |
+| **LSTM / GRU**          | Temporal fusion model             |
+| **NumPy**               | Numerical processing              |
+| **Pandas**              | Data processing                   |
+| **Scikit-learn**        | Machine learning utilities        |
+| **PyYAML**              | Configuration management          |
+| **Streamlit**           | Fleet analytics dashboard         |
+| **SQLite**              | Event storage                     |
+| **CSV**                 | Frame-level logging               |
+| **HTML / JavaScript**   | Browser dashboard                 |
+| **Raspberry Pi Pico**   | Optional external hardware alerts |
+
+The documented dependency set includes OpenCV, MediaPipe, Ultralytics, PyTorch, Streamlit, and related Python packages.
+
+## Project Structure
+
+```text
+VigilEye/
+│
+├── run.py
+├── config.yaml
+├── requirements.txt
+├── README.md
+├── test_cnn_live.py
+│
+├── vigileye/
+│   ├── __init__.py
+│   ├── config.py
+│   ├── landmarks.py
+│   ├── metrics.py
+│   ├── head_pose.py
+│   ├── gaze.py
+│   ├── distraction.py
+│   ├── fusion.py
+│   ├── temporal_model.py
+│   ├── calibration.py
+│   ├── alerts.py
+│   ├── logger.py
+│   ├── visualize.py
+│   ├── video.py
+│   ├── pipeline.py
+│   ├── cnn_inference.py
+│   ├── pico_alert.py
+│   │
+│   └── webui/
+│       ├── __init__.py
+│       ├── hub.py
+│       ├── server.py
+│       └── index.html
+│
+├── dashboard/
+│   └── app.py
+│
+├── training/
+│   └── train_drowsiness.py
+│
+├── scripts/
+│   ├── collect_features.py
+│   ├── train_fusion.py
+│   └── evaluate.py
+│
+├── tests/
+│   └── test_metrics.py
+│
+├── models/
+│
+├── data/
+│
+└── logs/
+```
+
+The repository layout above is based on the documented project structure.
+
+## Getting Started
+
+### Prerequisites
+
+* Python 3.12 or a compatible Python version
+* A webcam or video source
+* Git
+* Required Python dependencies
+* Optional: Raspberry Pi Pico and serial connection
+
+### Clone the Repository
 
 ```bash
-git clone <your-repo> vigileye && cd vigileye
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
+git clone https://github.com/<your-username>/VigilEye.git
+cd VigilEye
+```
 
+### Create a Virtual Environment
+
+```bash
+python -m venv venv
+```
+
+**Windows:**
+
+```bash
+venv\Scripts\activate
+```
+
+**macOS / Linux:**
+
+```bash
+source venv/bin/activate
+```
+
+### Install Dependencies
+
+```bash
 pip install -r requirements.txt
 ```
 
-### Two install traps, both handled
-
-**1. numpy 2.0.** MediaPipe breaks on `numpy >= 2.0` with a cryptic
-`_ARRAY_API not found` error. The pin in `requirements.txt` handles it — do
-not upgrade numpy past 2.0.
-
-**2. MediaPipe removed `mp.solutions`.** In the 0.10.2x series MediaPipe
-deleted the legacy solutions API that every tutorial (and most published
-drowsiness code) still uses. On a current release, `mp.solutions.face_mesh`
-raises `AttributeError: module 'mediapipe' has no attribute 'solutions'`.
-
-VigilEye supports **both** APIs and auto-detects which you have. Check with:
-
-```bash
-python -m vigileye.landmarks       # prints: solutions | tasks | none
-```
-
-* `solutions` — legacy API, nothing more to do.
-* `tasks` — modern API, needs a one-time model download:
-
-```bash
-python -m vigileye.landmarks --download
-```
-
-Both backends produce the identical 478-point topology, so every threshold,
-index constant and trained model works unchanged across them.
-
-For training only, the CPU torch build is ~5× smaller:
-
-```bash
-pip install torch --index-url https://download.pytorch.org/whl/cpu
-```
-
-Verify the install:
-
-```bash
-pytest -q                 # expect: 20 passed
-```
-
----
-
-## 3. Run it
+### Run the Application
 
 ```bash
 python run.py
 ```
 
-That is the whole demo. On first launch it spends 10 seconds calibrating —
-**look straight ahead at the road normally** — then starts classifying. The
-baseline is cached to `calibration.json` and reused next time.
+The application starts the camera pipeline and opens the browser-based Command Deck. On the first launch, the system performs a 10-second calibration before monitoring begins.
 
-Useful flags:
-
-```bash
-python run.py --source data/clip.mp4   # run against a video file
-python run.py --mode hybrid            # rules + trained LSTM
-python run.py --no-objects             # skip YOLO/hands (low-power / weak CPU)
-python run.py --recalibrate            # force a fresh baseline
-python run.py --headless               # no window, for embedded deployment
-python run.py --record out.mp4         # save annotated video for your pitch
-```
-
-Keys while running: `q` quit · `c` recalibrate · `m` mute · `h` hide HUD ·
-`s` save frame.
-
-### Prove it works, in this order
-
-1. **Blink normally** → stays ALERT. (If it flickers, calibration failed —
-   press `c` and hold still.)
-2. **Close your eyes ~2 s** → DROWSY within a second, alert fires.
-3. **Yawn twice** → yawn counter increments on the HUD.
-4. **Look at the passenger seat for 3 s** → DISTRACTED.
-5. **Hold a phone up** → DISTRACTED with a YOLO box on the phone.
-
-If step 1 fails, nothing downstream matters. Fix calibration first.
-
----
-
-## 4. Tuning
-
-Every threshold lives in `config.yaml`. Nothing is hard-coded in the
-detectors, so you retune for a new camera or vehicle without touching Python.
-
-| Symptom | Change |
-|---|---|
-| Fires DROWSY while you're alert | lower `eye.calib_ratio` (0.75 → 0.65) |
-| Misses obvious eye closure | raise `eye.calib_ratio` (0.75 → 0.82) |
-| Talking counts as yawning | raise `mouth.yawn_min_s` (1.2 → 1.8) |
-| Distraction too twitchy | raise `head.off_road_min_s` (2.0 → 3.0) |
-| Alerts too naggy | raise `alerts.cooldown_s`, `fusion.min_state_s` |
-| State flickers | raise `fusion.confirm_frames` |
-| Too slow on your machine | raise `objects.every_n_frames` (5 → 10), or `--no-objects` |
-
-`fusion.weights` controls how much each cue contributes. The defaults are
-deliberately conservative; retune them against your own labelled footage
-rather than by feel.
-
----
-
-## 5. Datasets
-
-Organise videos so the parent directory is the label:
-
-```
-data/videos/
-    alert/        subject01_noglasses_normal.avi
-    drowsy/       subject01_glasses_sleepy.avi
-    distracted/   subject03_talking.avi
-```
-
-| Dataset | Contains | Use for |
-|---|---|---|
-| **NTHU-DDD** | 36 subjects, drowsy/alert, glasses + night IR | main train/test set |
-| **YawDD** | dashboard-mounted yawning clips | MAR threshold validation |
-| **Your own footage** | Indian lighting, diverse skin tones, real dash placement | robustness claim |
-
-NTHU-DDD requires an academic request form — **start that on day one**, it
-can take a week or more to be granted. Build against your own recordings in
-the meantime; the pipeline does not care where the video came from.
-
-**Record your own footage.** This is your strongest differentiator and the
-one claim in the abstract you cannot currently defend. Aim for 8–10 people,
-day and night, with and without glasses, in an actual parked vehicle with the
-camera where it would really be mounted. Two hours of this is worth more to
-the judges than another model architecture.
-
----
-
-## 6. Training the v2 fusion model
-
-**Step 1 — extract features.**
-
-```bash
-python scripts/collect_features.py \
-    --videos data/videos --out data/features.csv --stride 2 --no-objects
-```
-
-This runs the *exact same* `VigilEyePipeline` the live system uses, which
-guarantees training features match inference features byte for byte.
-Divergence there is the classic cause of a model that scores 97% offline and
-fails in the vehicle. `--no-objects` skips YOLO and is roughly 4× faster;
-use it unless you specifically need phone cues in the training data.
-
-**Step 2 — train.**
-
-```bash
-python scripts/train_fusion.py --features data/features.csv --epochs 40
-```
-
-The script enforces three things that most published drowsiness results get
-wrong:
-
-- **Subject-wise splitting.** Whole *people* are held out, never frames.
-  Frame-level shuffling leaks the same face into train and test and inflates
-  accuracy by 15–25 points. If a judge asks one hard methodology question,
-  it will be this one.
-- **Windows never cross video boundaries.** A window spanning the end of one
-  clip and the start of another is a fabricated sample.
-- **Class weighting + macro-F1 selection.** Real datasets are heavily skewed
-  towards ALERT; unweighted training yields a model that always predicts
-  ALERT and reports 78% accuracy. Missing a micro-sleep is far worse than a
-  false alarm, and plain accuracy hides that entirely.
-
-**Step 3 — run the hybrid.**
-
-```bash
-python run.py --mode hybrid
-```
-
-`hybrid` blends the rule score with the LSTM's class probabilities
-(`temporal.blend`, default 0.5). The rule engine still owns the hysteresis
-and still works from frame one, so an under-trained model degrades the system
-gracefully instead of breaking it.
-
-### What score to expect
-
-On NTHU-DDD with honest subject-wise splits, **75–88% macro-F1** is a
-realistic range. If you see 97%+, you have a leak — check that no subject
-appears in both splits.
-
----
-
-## 7. Evaluation
-
-```bash
-# LSTM quality on held-out features
-python scripts/evaluate.py model --features data/features.csv
-
-# rule engine accuracy against labelled videos (no training required)
-python scripts/evaluate.py rules --videos data/videos
-
-# per-stage latency and sustained FPS — "will this run on a Jetson Nano?"
-python scripts/evaluate.py speed --source 0 --frames 200
-```
-
-The `speed` benchmark reports with and without YOLO separately, which is the
-number you need for the edge-deployment claim. Report **p95 latency**, not
-mean — a system that averages 30 FPS but stalls for 400 ms during a
-micro-sleep is not a safety system.
-
----
-
-## 8. Fleet dashboard
+### Run the Fleet Dashboard
 
 ```bash
 streamlit run dashboard/app.py
 ```
 
-Reads the SQLite event store and shows alerts by type, alerts by hour of day
-(the fatigue-peak story), risk score over time, and a driver risk ranking
-normalised per hour driven. This is what makes the system valuable to a fleet
-operator rather than only to the driver in the seat — do not skip it in the
-pitch.
+The Streamlit dashboard reads the SQLite event database and provides historical session analytics.
 
----
+## Configuration
 
-## 9. Edge deployment
+VigilEye uses `config.yaml` for tunable thresholds and runtime settings.
 
-Measured design targets on a Jetson Nano / Pi 4 class device:
+Example configuration categories include:
 
-| Config | Expected |
-|---|---|
-| Face mesh + fusion only (`--no-objects`) | 25–30 FPS |
-| Full pipeline, YOLO every 5th frame | 12–18 FPS |
+```yaml
+camera:
+  width: 480
+  height: 360
 
-Tips that actually matter:
+eye:
+  perclos_window_s: 60
+  perclos_warn: 0.15
+  perclos_critical: 0.30
 
-- `objects.every_n_frames: 10` on a Pi — YOLO dominates the budget and phone
-  detections are held between runs anyway.
-- Drop `camera.width/height` to 480×360 before touching anything else.
-- Export YOLO to TensorRT on Jetson: `yolo export model=yolov8n.pt format=engine`.
-- Run `--headless` and let the dashboard read the SQLite file; rendering the
-  HUD costs real frames.
-- Set `logging.frame_log: false` in production. Per-frame CSV is for training
-  data collection, not for shipping.
+mouth:
+  yawn_min_s: 1.2
 
----
+head:
+  off_road_min_s: 2.0
 
-## 10. Build schedule
+objects:
+  enabled: true
+  every_n_frames: 5
 
-A realistic order that keeps you demo-ready at every checkpoint:
+fusion:
+  mode: rule
+  drowsy_threshold: 0.45
+  distract_threshold: 0.45
 
-| Phase | Work | Checkpoint |
-|---|---|---|
-| 1 | Install, `python run.py`, verify calibration | live EAR/MAR on screen |
-| 2 | Tune `config.yaml` on yourself + 2 teammates | reliable drowsy detection |
-| 3 | Request NTHU-DDD; record your own footage | 8–10 subjects captured |
-| 4 | `collect_features.py` → `train_fusion.py` | trained checkpoint |
-| 5 | `evaluate.py` all three modes | numbers for the slides |
-| 6 | Dashboard + edge benchmark + demo video | full pitch |
+alerts:
+  enabled: true
+  cooldown_s: 5
+  escalate_s: 8
 
-Phases 1–2 give you a working demo. Everything after is what turns a demo
-into a submission.
-
----
-
-## 11. Demo script
-
-Five minutes, in this order:
-
-1. **Launch, calibrate on a judge.** Shows it adapts to a new face in 10 s.
-2. **Normal blinking → stays ALERT.** Leads with the false-positive problem,
-   which is what everyone else's demo fails at.
-3. **Eyes closed 2 s → DROWSY + alert.** The core capability.
-4. **Look away 3 s → DISTRACTED.** Emphasise: *different state, different
-   intervention* — this is the differentiator.
-5. **Phone in frame → DISTRACTED + YOLO box.**
-6. **Cut to the dashboard.** "Here's what the fleet operator sees."
-
-Have `--record` output on standby in case the venue lighting defeats the live
-camera. Record it the night before with the actual demo laptop.
-
----
-
-## 12. Known limitations
-
-State these before a judge finds them. Owning a limitation reads as rigour;
-being caught by one reads as overclaiming.
-
-- **The Indian-conditions claim is design intent, not a measured result.**
-  Nothing here has been validated across skin tones or Indian lighting yet.
-  That needs your own recorded, labelled footage.
-- **Hands-off-wheel uses MediaPipe Hands + a configurable ROI**, not YOLO —
-  COCO has no "hand" class. It works day one but the ROI
-  (`objects.hands.wheel_roi`) must be set per vehicle.
-- **PERCLOS is inherently slow.** It is a rolling-minute statistic, so gradual
-  fatigue takes ~45–60 s to register. Acute events are caught immediately by
-  the micro-sleep and long-closure overrides; this is a deliberate trade-off,
-  not a bug.
-- **Sunglasses defeat EAR and gaze entirely.** The system falls back to head
-  pose and yawning. An IR camera is the real fix.
-- **The camera pose model is a pinhole approximation** (focal length ≈ image
-  width). Fine for detecting pose *change*; use `cv2.calibrateCamera` if you
-  ever need absolute angles.
-- **Not a medical or legal device.** It is a driver-assistance aid.
-- **The Tasks backend downloads model bundles from Google's CDN on first
-  run.** Fetch them ahead of time (`python -m vigileye.landmarks --download`)
-  — do not rely on venue wifi during a demo.
-
----
-
-## 13. File map
-
-```
-vigileye/
-├── config.yaml                 every tunable threshold
-├── requirements.txt
-├── run.py                      live runner (CLI, HUD, alerts, logging)
-│
-├── vigileye/
-│   ├── config.py               YAML + defaults, dot-access
-│   ├── landmarks.py            MediaPipe wrapper, index constants, 3-D model
-│   ├── metrics.py              EAR, MAR, PERCLOS, blinks, micro-sleeps, yawns
-│   ├── head_pose.py            solvePnP, Euler decomposition, nod/turn
-│   ├── gaze.py                 iris-based gaze, eyes-off-road window
-│   ├── distraction.py          YOLOv8n phone + MediaPipe hands-off-wheel
-│   ├── fusion.py               scoring, hysteresis state machine, hybrid
-│   ├── temporal_model.py       LSTM/GRU + sliding-window inference
-│   ├── calibration.py          per-driver baseline
-│   ├── alerts.py               escalation, cooldown, audio fallbacks
-│   ├── logger.py               frame CSV + SQLite event store
-│   ├── visualize.py            HUD overlay
-│   ├── video.py                threaded capture (drops stale frames)
-│   └── pipeline.py             orchestrates everything
-│
-├── scripts/
-│   ├── collect_features.py     videos → features.csv
-│   ├── train_fusion.py         subject-wise LSTM training
-│   └── evaluate.py             model / rules / speed benchmarks
-│
-├── dashboard/app.py            Streamlit fleet analytics
-└── tests/test_metrics.py       20 unit tests
+logging:
+  dir: logs
+  frame_log: true
+  db: logs/vigileye.db
 ```
 
-### Two bugs already found and fixed by the test suite
+The complete configuration reference is maintained in `config.yaml`.
 
-Worth knowing about, because both are easy to reintroduce:
+## Model Training
 
-**Falsy-zero in micro-sleep timing.** `self._closed_since or ts` treats
-timestamp `0.0` as "not started", because `0.0` is falsy in Python. Live
-webcam use hides this (Unix epoch timestamps), but *every video file starts
-at t=0.0* — so offline feature extraction would silently never emit a
-micro-sleep, and the v2 model would train on broken labels. Now uses an
-explicit `is not None` check, locked behind a regression test.
+The repository includes training scripts for future learned components.
 
-**PERCLOS cold start.** One closed frame at startup made PERCLOS read 100%,
-pushing the drowsy score to 0.40 against a 0.45 threshold — one frame of
-noise away from a false alarm on every launch. Its influence now ramps in
-over the first 15 seconds of window coverage.
+### Drowsiness Classifier
+
+The documented training pipeline uses MobileNetV3-Small for binary drowsiness classification.
+
+```bash
+python training/train_drowsiness.py
+```
+
+The trained checkpoint is saved as:
+
+```text
+models/drowsiness_model.pth
+```
+
+The CNN is optional in the current pipeline and does not contribute until a trained checkpoint is available.
+
+### Temporal Fusion Model
+
+The temporal model uses a sliding window of behavioural features.
+
+```bash
+python scripts/collect_features.py --videos data/videos
+python scripts/train_fusion.py --features data/features.csv --epochs 40
+```
+
+After training, the temporal model can be used with:
+
+```bash
+python run.py --mode temporal
+```
+
+The documented temporal model is designed to learn fatigue patterns from sequential behavioural signals.
+
+## Logging and Analytics
+
+VigilEye stores:
+
+* Frame-level measurements in CSV.
+* Driver-state events in SQLite.
+* Session information for historical analysis.
+
+The Streamlit dashboard provides:
+
+* Session and frame totals.
+* Drowsiness and distraction alert counts.
+* Alerts by hour.
+* Risk scores over time.
+* Driver risk ranking.
+* Session history.
+* Raw alert logs.
+
+## Current Project Status
+
+### Working
+
+* Real-time perception pipeline.
+* Facial landmark processing.
+* Eye, mouth, head pose, and gaze analysis.
+* Phone and hands-on-wheel detection.
+* Rule-based fusion.
+* Driver-state classification.
+* Audio alerts.
+* Driver calibration.
+* CSV and SQLite logging.
+* Browser Command Deck.
+* Streamlit fleet dashboard.
+* Host-side Raspberry Pi Pico serial integration.
+
+### In Development
+
+* Training the MobileNetV3 drowsiness classifier.
+* Training the temporal LSTM/GRU fusion model.
+* Committing and flashing Pico firmware.
+* Testing the complete hardware alert path.
+* Validating performance on labelled driving footage.
+
+The current implementation has been verified through live runs, but the learned models and complete Pico hardware path are not yet finished.
+
+## Performance
+
+The documented CPU-only tests achieved approximately **4–5 FPS** on the development machine with the full pipeline enabled.
+
+The project’s design targets are:
+
+| Configuration                           | Target    |
+| --------------------------------------- | --------- |
+| Face mesh + fusion only                 | 25–30 FPS |
+| Full pipeline with YOLO every 5th frame | 12–18 FPS |
+
+Performance depends on the hardware, camera resolution, and enabled detection modules.
+
+## Future Scope
+
+* Complete training and integration of the drowsiness CNN.
+* Complete training and integration of the temporal fusion model.
+* Deploy the system on Jetson Nano or Raspberry Pi-class edge hardware.
+* Add TensorRT optimisation for YOLO inference.
+* Complete Raspberry Pi Pico firmware integration.
+* Add hardware watchdog and keep-alive support.
+* Improve performance through inference optimisation.
+* Validate the system using labelled driving footage.
+* Expand the fleet analytics dashboard.
+
+## Limitations
+
+* The current learned models are not yet trained.
+* The system has not been fully validated on a large labelled dataset.
+* CPU-only inference limits real-time performance.
+* The Pico hardware path requires additional firmware and testing.
+* Camera placement and lighting can affect detection accuracy.
+* The system is intended as a driver-assistance tool, not a replacement for responsible driving.
+
+## Disclaimer
+
+VigilEye is a research and development project intended for educational and experimental purposes. It is not a certified automotive safety system and should not be relied upon as the sole means of preventing accidents.
+
+Drivers must remain responsible for safe vehicle operation.
+
+## License
+
+This project is intended for educational and development purposes.
+
+## Author
+
+Syed Misbahul Islam
+
+GitHub: https://github.com/Syed-Misbahul-Islam
+
+## Acknowledgements
+
+* MediaPipe
+* OpenCV
+* Ultralytics
+* PyTorch
+* Streamlit
+* Raspberry Pi
