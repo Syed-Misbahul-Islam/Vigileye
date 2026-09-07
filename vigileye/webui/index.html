@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html class="h-full" lang="en">
+<head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>VigilEye Command Deck — Multimodal Driver Safety Telemetry</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com" rel="preconnect">
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          },
+          colors: {
+            brand: { 50: '#f8fafc', 500: '#475569', 600: '#334155' },
+            glass: {
+              surface: 'rgba(255, 255, 255, 0.72)',
+              surfaceHover: 'rgba(255, 255, 255, 0.88)',
+              border: 'rgba(255, 255, 255, 0.85)',
+              borderSubtle: 'rgba(226, 232, 240, 0.75)',
+            }
+          },
+          boxShadow: {
+            'liquid': '0 8px 32px 0 rgba(148, 163, 184, 0.12), 0 1px 2px 0 rgba(255, 255, 255, 0.9) inset',
+            'liquid-lg': '0 20px 48px -12px rgba(100, 116, 139, 0.14), 0 1px 3px 0 rgba(255, 255, 255, 0.95) inset',
+            'glow-subtle': '0 0 20px -4px rgba(71, 85, 105, 0.18)',
+            'inner-bevel': 'inset 0 1px 1px 0 rgba(255, 255, 255, 0.9), inset 0 -1px 2px 0 rgba(148, 163, 184, 0.08)'
+          }
+        }
+      }
+    }
+  </script>
+<style data-purpose="glassmorphic-effects">
+    .liquid-card {
+      background: rgba(255, 255, 255, 0.18);
+      backdrop-filter: blur(20px) saturate(130%);
+      -webkit-backdrop-filter: blur(20px) saturate(130%);
+      border: 1px solid rgba(255, 255, 255, 0.35);
+      box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.03), inset 0 1px 1px rgba(255, 255, 255, 0.5);
+      transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.25s ease, border-color 0.25s ease;
+      will-change: transform;
+    }
+    .liquid-card:hover {
+      transform: scale(1.018);
+      background: rgba(255, 255, 255, 0.26);
+      border-color: rgba(255, 255, 255, 0.5);
+      z-index: 10;
+    }
+    .liquid-pill {
+      background: rgba(255, 255, 255, 0.16);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      box-shadow: 0 2px 8px -2px rgba(0, 0, 0, 0.02), inset 0 1px 1px rgba(255, 255, 255, 0.4);
+      transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.2s ease, border-color 0.2s ease;
+    }
+    .liquid-pill:hover { background: rgba(255, 255, 255, 0.28); border-color: rgba(255, 255, 255, 0.5); }
+    body { background-color: #F4F0E8; }
+    header.sticky {
+      background-color: rgba(255, 255, 255, 0.18);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+    }
+    footer.mt-auto {
+      background-color: rgba(255, 255, 255, 0.18);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-top: 1px solid rgba(255, 255, 255, 0.3);
+    }
+    /* Alert-level flash on the hero banner, mirroring the desktop HUD. */
+    @keyframes vigil-flash {
+      0%, 100% { box-shadow: 0 4px 20px -2px rgba(0,0,0,0.03); }
+      50% { box-shadow: 0 0 0 3px rgba(71, 85, 105, 0.55); }
+    }
+    .flashing { animation: vigil-flash 0.9s ease-in-out infinite; }
+    .view[hidden] { display: none; }
+    #feed { width: 100%; height: 100%; object-fit: cover; display: block; }
+  </style>
+</head>
+<body class="min-h-full font-sans text-slate-800 antialiased selection:bg-slate-700 selection:text-white relative">
+<div class="relative z-10 flex min-h-screen flex-col">
+
+<!-- BEGIN: TopNavigationBar -->
+<header class="sticky top-0 z-40 border-b border-white/60 bg-white/40 backdrop-blur-2xl transition-all">
+<div class="mx-auto flex max-w-[1780px] items-center justify-between px-5 py-3 sm:px-8">
+<div class="flex items-center gap-3.5">
+<div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-tr from-slate-900 via-slate-800 to-slate-700 text-white shadow-md shadow-slate-900/10">
+<svg class="h-5 w-5 text-slate-300" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewBox="0 0 24 24">
+<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path>
+<circle cx="12" cy="12" r="3"></circle>
+<circle cx="12" cy="12" fill="currentColor" r="1"></circle>
+</svg>
+</div>
+<div>
+<div class="flex items-center gap-2">
+<h1 class="text-base font-bold tracking-tight text-slate-900">VigilEye <span class="font-semibold text-slate-500">Command Deck</span></h1>
+<span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700 ring-1 ring-inset ring-slate-300/50">
+<span id="hdrDot" class="mr-1.5 h-1.5 w-1.5 rounded-full bg-slate-600 animate-pulse"></span>
+<span id="hdrFeed">CONNECTING</span>
+</span>
+</div>
+<p class="text-xs font-normal tracking-wide text-slate-500">Multimodal driver fatigue &amp; distraction monitoring system</p>
+</div>
+</div>
+<div class="flex items-center gap-2.5">
+<div class="liquid-pill flex items-center gap-2 rounded-xl px-3.5 py-1.5 text-xs">
+<span class="text-slate-400 uppercase text-[10px] tracking-wider font-semibold">Driver</span>
+<span id="hdrDriver" class="font-mono font-semibold text-slate-800">—</span>
+</div>
+<div class="liquid-pill hidden items-center gap-2 rounded-xl px-3.5 py-1.5 text-xs sm:flex">
+<span class="text-slate-400 uppercase text-[10px] tracking-wider font-semibold">Vehicle</span>
+<span id="hdrVehicle" class="font-mono font-semibold text-slate-800">—</span>
+</div>
+<div class="liquid-pill flex items-center gap-2 rounded-xl px-3.5 py-1.5 text-xs">
+<span class="text-slate-400 uppercase text-[10px] tracking-wider font-semibold">Trip</span>
+<span id="hdrTrip" class="font-mono font-bold tracking-tight text-slate-800">00:00:00</span>
+</div>
+<div class="liquid-pill flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-mono text-slate-600">
+<span id="hdrFps" class="font-semibold text-slate-800">0</span>
+<span class="text-[10px] text-slate-400">fps</span>
+</div>
+<!-- Live controls: the keyboard shortcuts of the desktop window, in the page -->
+<div class="flex items-center gap-1.5">
+<button data-cmd="recalibrate" title="Recalibrate baseline (c)" class="liquid-pill flex h-8 items-center gap-1.5 rounded-xl px-2.5 text-xs font-semibold text-slate-600 hover:text-slate-900" type="button">
+<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 4v5h5M20 20v-5h-5" stroke-linecap="round"/><path d="M20 9A8 8 0 006.3 5.3M4 15a8 8 0 0013.7 3.7" stroke-linecap="round"/></svg>
+<span class="hidden sm:inline">Calibrate</span>
+</button>
+<button id="muteBtn" data-cmd="mute" title="Mute / unmute alerts (m)" class="liquid-pill flex h-8 items-center gap-1.5 rounded-xl px-2.5 text-xs font-semibold text-slate-600 hover:text-slate-900" type="button">
+<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5z" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 9c1.2 1.2 1.2 4.8 0 6" stroke-linecap="round"/></svg>
+<span id="muteLabel" class="hidden sm:inline">Mute</span>
+</button>
+<button data-cmd="snapshot" title="Save annotated frame (s)" class="liquid-pill flex h-8 items-center gap-1.5 rounded-xl px-2.5 text-xs font-semibold text-slate-600 hover:text-slate-900" type="button">
+<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 8a2 2 0 012-2h2l1.5-2h7L17 6h2a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" stroke-linecap="round"/><circle cx="12" cy="12.5" r="3.2"/></svg>
+<span class="hidden sm:inline">Snapshot</span>
+</button>
+<button data-cmd="stop" title="Stop the session (q)" class="flex h-8 items-center gap-1.5 rounded-xl bg-slate-900 px-2.5 text-xs font-semibold text-white shadow-sm hover:bg-slate-700" type="button">
+<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect height="12" rx="2" width="12" x="6" y="6"/></svg>
+<span class="hidden sm:inline">Stop</span>
+</button>
+</div>
+</div>
+</div>
+</header>
+<!-- END: TopNavigationBar -->
+
+<div class="mx-auto flex w-full max-w-[1780px] flex-1 gap-6 px-4 py-6 sm:px-8">
+
+<!-- BEGIN: LeftFloatingWorkspaceSidebar -->
+<aside aria-label="Workspace Navigation" class="hidden w-56 flex-shrink-0 lg:block">
+<div class="sticky top-20 flex flex-col gap-5">
+<div class="px-2 text-[11px] font-bold uppercase tracking-widest text-slate-400">Workspace</div>
+<nav class="space-y-1.5" data-purpose="sidebar-links">
+<a data-view="cockpit" class="nav-link liquid-pill group flex items-center justify-between rounded-xl px-3.5 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-white/80 hover:text-slate-900" href="#">
+<div class="flex items-center gap-2.5">
+<span class="nav-icon flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+</span>
+<span>Live cockpit</span>
+</div>
+<span class="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-500">1</span>
+</a>
+<a data-view="trends" class="nav-link liquid-pill group flex items-center justify-between rounded-xl px-3.5 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-white/80 hover:text-slate-900" href="#">
+<div class="flex items-center gap-2.5">
+<span class="nav-icon flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+</span>
+<span>Fatigue trends</span>
+</div>
+<span class="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-500">2</span>
+</a>
+<a data-view="camera" class="nav-link liquid-pill group flex items-center justify-between rounded-xl px-3.5 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-white/80 hover:text-slate-900" href="#">
+<div class="flex items-center gap-2.5">
+<span class="nav-icon flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path><path d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+</span>
+<span>Camera &amp; gaze</span>
+</div>
+<span class="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-500">3</span>
+</a>
+<a data-view="incidents" class="nav-link liquid-pill group flex items-center justify-between rounded-xl px-3.5 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-white/80 hover:text-slate-900" href="#">
+<div class="flex items-center gap-2.5">
+<span class="nav-icon flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+</span>
+<span>Incident log</span>
+</div>
+<span id="navIncidents" class="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-500">4</span>
+</a>
+<a data-view="fleet" class="nav-link liquid-pill group flex items-center justify-between rounded-xl px-3.5 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-white/80 hover:text-slate-900" href="#">
+<div class="flex items-center gap-2.5">
+<span class="nav-icon flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 6h16M4 10h16M4 14h16M4 18h16" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+</span>
+<span>Fleet board</span>
+</div>
+<span class="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-500">5</span>
+</a>
+</nav>
+<div class="liquid-card rounded-2xl p-3.5 text-xs text-slate-600">
+<div class="mb-2 flex items-center justify-between">
+<span class="text-[10px] font-medium uppercase tracking-wider text-slate-500">Edge AI Model</span>
+<span class="h-2 w-2 rounded-full bg-slate-500"></span>
+</div>
+<div id="sideBackend" class="font-semibold text-slate-800">MediaPipe + PERCLOS</div>
+<div class="mt-1 flex items-center justify-between text-[11px] text-slate-400">
+<span>Latency</span>
+<span id="sideLatency" class="font-mono text-slate-600">—</span>
+</div>
+</div>
+</div>
+</aside>
+<!-- END: LeftFloatingWorkspaceSidebar -->
+
+<main class="min-w-0 flex-1 space-y-5">
+
+<!-- Calibration ribbon (only while the baseline is being captured) -->
+<section id="calibRibbon" hidden class="liquid-card rounded-2xl p-4">
+<div class="flex items-center justify-between text-xs">
+<span class="font-semibold uppercase tracking-wider text-slate-600">Calibrating baseline</span>
+<span class="text-slate-500">Look straight ahead with a neutral expression</span>
+</div>
+<div class="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-200/70 p-0.5">
+<div id="calibBar" class="h-full rounded-full bg-gradient-to-r from-slate-400 to-slate-700" style="width: 0%"></div>
+</div>
+</section>
+
+<!-- ============================ VIEW: LIVE COCKPIT ============================ -->
+<div id="view-cockpit" class="view space-y-5">
+
+<section class="grid grid-cols-2 gap-3.5 sm:grid-cols-3 lg:grid-cols-5" data-purpose="top-kpi-strip">
+<div class="liquid-card rounded-2xl p-4 transition duration-200">
+<div class="flex items-center justify-between">
+<span class="text-xs font-semibold uppercase tracking-wider text-slate-500">Trip time</span>
+<svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+</div>
+<div id="kpiTrip" class="mt-2 font-mono text-2xl font-bold tracking-tight text-slate-900">00:00:00</div>
+<div class="mt-1 flex items-center text-[11px] font-medium text-slate-600"><span class="mr-1 text-slate-400">●</span> Continuous telemetry</div>
+</div>
+<div class="liquid-card rounded-2xl p-4 transition duration-200">
+<div class="flex items-center justify-between">
+<span class="text-xs font-semibold uppercase tracking-wider text-slate-500">Camera lock</span>
+<span class="flex h-2 w-2 rounded-full bg-slate-600"></span>
+</div>
+<div class="mt-2 flex items-baseline gap-2"><span id="kpiLock" class="font-mono text-2xl font-bold tracking-tight text-slate-900">—</span></div>
+<div id="kpiLockNote" class="mt-1 text-[11px] text-slate-500">Front cabin sensor #01</div>
+</div>
+<div class="liquid-card rounded-2xl p-4 transition duration-200">
+<div class="flex items-center justify-between">
+<span class="text-xs font-semibold uppercase tracking-wider text-slate-500">Fatigue alerts</span>
+<span class="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700 ring-1 ring-slate-300/60">Watch</span>
+</div>
+<div id="kpiFatigue" class="mt-2 font-mono text-2xl font-bold tracking-tight text-slate-800">0</div>
+<div class="mt-1 text-[11px] text-slate-500">Microsleep threshold tuned</div>
+</div>
+<div class="liquid-card rounded-2xl p-4 transition duration-200">
+<div class="flex items-center justify-between">
+<span class="text-xs font-semibold uppercase tracking-wider text-slate-500">Distraction alerts</span>
+<span class="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700 ring-1 ring-slate-300/60">Active</span>
+</div>
+<div id="kpiDistract" class="mt-2 font-mono text-2xl font-bold tracking-tight text-slate-800">0</div>
+<div class="mt-1 text-[11px] text-slate-500">Gaze deviation cumulative</div>
+</div>
+<div class="liquid-card rounded-2xl p-4 transition duration-200">
+<div class="flex items-center justify-between">
+<span class="text-xs font-semibold uppercase tracking-wider text-slate-500">Critical events</span>
+<span class="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700 ring-1 ring-slate-300/60">Level 2</span>
+</div>
+<div id="kpiCritical" class="mt-2 font-mono text-2xl font-bold tracking-tight text-slate-800">0</div>
+<div class="mt-1 text-[11px] font-medium text-slate-600">Escalated alerts</div>
+</div>
+</section>
+
+<section id="heroBanner" class="liquid-card relative overflow-hidden rounded-3xl border border-white/90 p-6 sm:p-7" data-purpose="hero-driver-status">
+<div class="relative z-10 flex flex-col gap-6 xl:flex-row xl:items-center xl:justify-between">
+<div class="min-w-0 max-w-xl flex-1 space-y-4">
+  <div>
+    <div class="flex items-center gap-3">
+      <span class="relative flex h-3.5 w-3.5">
+        <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-slate-400 opacity-60"></span>
+        <span class="relative inline-flex h-3.5 w-3.5 rounded-full bg-slate-700 shadow-sm"></span>
+      </span>
+      <h2 id="heroState" class="text-3xl font-extrabold tracking-tight text-slate-900">Connecting…</h2>
+    </div>
+    <p id="heroNote" class="mt-1 text-sm font-medium text-slate-500">Waiting for the first telemetry frame.</p>
+  </div>
+  <div class="grid grid-cols-1 gap-4 pt-2 sm:grid-cols-3">
+    <div class="space-y-1.5">
+      <div class="flex items-center justify-between text-xs">
+        <span class="font-medium text-slate-500">Drowsiness</span>
+        <span id="heroDrowsyVal" class="font-mono font-bold text-slate-700">—</span>
+      </div>
+      <div class="h-2 w-full overflow-hidden rounded-full bg-slate-200/70 p-0.5">
+        <div id="heroDrowsyBar" class="h-full rounded-full bg-gradient-to-r from-slate-400 to-slate-600" style="width: 0%"></div>
+      </div>
+    </div>
+    <div class="space-y-1.5">
+      <div class="flex items-center justify-between text-xs">
+        <span class="font-medium text-slate-500">Distraction</span>
+        <span id="heroDistractVal" class="font-mono font-bold text-slate-700">—</span>
+      </div>
+      <div class="h-2 w-full overflow-hidden rounded-full bg-slate-200/70 p-0.5">
+        <div id="heroDistractBar" class="h-full rounded-full bg-gradient-to-r from-slate-400 to-slate-500" style="width: 0%"></div>
+      </div>
+    </div>
+    <div class="space-y-1.5">
+      <div class="flex items-center justify-between text-xs">
+        <span class="font-medium text-slate-500">Eyes off road</span>
+        <span id="heroEyesVal" class="font-mono font-bold text-slate-700">—</span>
+      </div>
+      <div class="h-2 w-full overflow-hidden rounded-full bg-slate-200/70 p-0.5">
+        <div id="heroEyesBar" class="h-full rounded-full bg-gradient-to-r from-slate-400 to-slate-600" style="width: 0%"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Live camera feed -->
+<div class="liquid-card group relative flex w-full flex-shrink-0 flex-col overflow-hidden rounded-2xl p-4 shadow-sm ring-1 ring-white transition duration-200 sm:w-[460px] lg:w-[480px] xl:w-[500px]">
+  <div class="mb-2.5 flex items-center justify-between">
+    <div class="flex items-center gap-2">
+      <span class="relative flex h-2 w-2">
+        <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-slate-400 opacity-75"></span>
+        <span class="relative inline-flex h-2 w-2 rounded-full bg-slate-700"></span>
+      </span>
+      <span class="text-[11px] font-bold uppercase tracking-wider text-slate-800">Cabin Sensor Feed</span>
+    </div>
+    <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 font-mono text-[9px] font-semibold text-slate-700 ring-1 ring-inset ring-slate-300/60">
+      <span class="mr-1 h-1.5 w-1.5 animate-pulse rounded-full bg-slate-600"></span>MJPEG / OPENCV LIVE
+    </span>
+  </div>
+  <div class="relative aspect-[16/9] min-h-[220px] w-full overflow-hidden rounded-xl border border-slate-700/60 bg-[#0b0f17] shadow-inner">
+    <div id="feedSlotCockpit" class="absolute inset-0"></div>
+    <div class="pointer-events-none absolute inset-x-3 top-3 z-10 flex items-center justify-between">
+      <div class="flex items-center gap-1.5 rounded-md bg-slate-900/80 px-2 py-0.5 ring-1 ring-white/10 backdrop-blur-sm">
+        <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-slate-200"></span>
+        <span id="feedMode" class="font-mono text-[9px] font-semibold tracking-wide text-slate-200">CAM_01</span>
+      </div>
+      <div id="feedRes" class="rounded-md bg-slate-900/80 px-2 py-0.5 font-mono text-[9px] font-medium text-slate-300 ring-1 ring-white/10 backdrop-blur-sm">—</div>
+    </div>
+    <div class="pointer-events-none absolute inset-x-3 bottom-3 z-10 flex items-center justify-between font-mono text-[9px] text-slate-300">
+      <div class="flex items-center gap-2 rounded-md bg-slate-900/80 px-2 py-0.5 ring-1 ring-white/10 backdrop-blur-sm">
+        <span>EAR: <strong id="feedEar" class="font-mono text-white">—</strong></span>
+        <span class="text-slate-600">|</span>
+        <span>MAR: <strong id="feedMar" class="font-mono text-white">—</strong></span>
+        <span class="text-slate-600">|</span>
+        <span>MESH: <strong id="feedMesh" class="font-mono text-white">—</strong></span>
+      </div>
+      <div id="feedPose" class="rounded-md bg-slate-900/80 px-2 py-0.5 font-mono text-slate-300 ring-1 ring-white/10 backdrop-blur-sm">—</div>
+    </div>
+  </div>
+  <div class="mt-2.5 flex items-center justify-between font-mono text-[10px] text-slate-500">
+    <span>Session: <strong id="footSession" class="font-mono text-slate-700">—</strong></span>
+    <span>Pico: <strong id="footPico" class="font-mono text-slate-800">—</strong></span>
+  </div>
+</div>
+
+<div class="liquid-pill flex flex-shrink-0 flex-col items-center justify-center gap-3 rounded-2xl p-5 shadow-sm xl:w-48 xl:self-stretch">
+  <div class="space-y-0.5 text-center">
+    <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500">Risk Profile</div>
+    <div class="text-[10px] text-slate-400">max(drowsy, distract)</div>
+  </div>
+  <div class="relative my-1 flex h-24 w-24 items-center justify-center">
+    <svg class="h-24 w-24 -rotate-90 transform" viewBox="0 0 100 100">
+      <circle cx="50" cy="50" fill="transparent" r="40" stroke="#e2e8f0" stroke-width="7"></circle>
+      <circle id="riskArc" cx="50" cy="50" fill="transparent" r="40" stroke="url(#riskGradient)" stroke-dasharray="251.2" stroke-dashoffset="251.2" stroke-linecap="round" stroke-width="7"></circle>
+      <defs>
+        <linearGradient id="riskGradient" x1="0%" x2="100%" y1="0%" y2="100%">
+          <stop offset="0%" stop-color="#475569"></stop>
+          <stop offset="100%" stop-color="#64748b"></stop>
+        </linearGradient>
+      </defs>
+    </svg>
+    <div class="absolute inset-0 flex flex-col items-center justify-center text-center">
+      <span id="riskValue" class="font-mono text-2xl font-black tracking-tighter text-slate-900">0</span>
+      <span class="text-[9px] font-medium uppercase tracking-wider text-slate-400">risk / 100</span>
+    </div>
+  </div>
+  <span id="riskLabel" class="inline-block rounded-full bg-slate-100 px-3 py-1 text-center text-xs font-semibold text-slate-700 ring-1 ring-slate-300/60">—</span>
+</div>
+</div>
+</section>
+
+<section class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3" data-purpose="biometric-telemetry-grid">
+<div class="liquid-card flex flex-col justify-between rounded-2xl p-5">
+<div>
+<div class="flex items-center justify-between">
+<span class="text-xs font-semibold uppercase tracking-wider text-slate-500">Eye opening (EAR)</span>
+<span id="earChip" class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700 ring-1 ring-slate-300/60">—</span>
+</div>
+<div class="mt-2 flex items-baseline gap-2">
+<div id="ear" class="font-mono text-3xl font-extrabold tracking-tight text-slate-900">0.00</div>
+<div class="text-xs text-slate-400">Personal limit <span id="earLimit" class="font-mono font-medium text-slate-600">—</span></div>
+</div>
+<div class="mt-2 h-1.5 w-full rounded-full bg-slate-200/80"><div id="earBar" class="h-1.5 rounded-full bg-slate-600" style="width: 0%"></div></div>
+</div>
+<div class="mt-4 pt-2">
+<svg class="h-16 w-full overflow-visible" preserveAspectRatio="none" viewBox="0 0 300 60">
+<defs><linearGradient id="earGradient" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#475569" stop-opacity="0.25"></stop><stop offset="100%" stop-color="#475569" stop-opacity="0"></stop></linearGradient></defs>
+<path id="earFill" d="" fill="url(#earGradient)"></path>
+<path id="earPath" d="" fill="none" stroke="#334155" stroke-linecap="round" stroke-width="2.2"></path>
+</svg>
+</div>
+</div>
+
+<div class="liquid-card flex flex-col justify-between rounded-2xl p-5">
+<div>
+<div class="flex items-center justify-between">
+<span class="text-xs font-semibold uppercase tracking-wider text-slate-500">Eyes closed / minute</span>
+<span id="perclosChip" class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700 ring-1 ring-slate-300/60">—</span>
+</div>
+<div class="mt-2 flex items-baseline gap-2">
+<div id="perclos" class="font-mono text-3xl font-extrabold tracking-tight text-slate-800">0.0%</div>
+<div class="text-xs text-slate-400">PERCLOS, 60-second rolling window</div>
+</div>
+</div>
+<div class="mt-4 pt-2">
+<svg class="h-16 w-full overflow-visible" preserveAspectRatio="none" viewBox="0 0 300 60">
+<defs><linearGradient id="perclosGradient" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#64748b" stop-opacity="0.22"></stop><stop offset="100%" stop-color="#64748b" stop-opacity="0"></stop></linearGradient></defs>
+<path id="perclosFill" d="" fill="url(#perclosGradient)"></path>
+<path id="perclosPath" d="" fill="none" stroke="#64748b" stroke-linecap="round" stroke-width="2"></path>
+</svg>
+</div>
+</div>
+
+<div class="liquid-card flex flex-col justify-between rounded-2xl p-5">
+<div>
+<div class="flex items-center justify-between">
+<span class="text-xs font-semibold uppercase tracking-wider text-slate-500">Blink rate</span>
+<span id="blinkChip" class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700 ring-1 ring-slate-300/60">—</span>
+</div>
+<div class="mt-2 flex items-baseline gap-2">
+<div class="font-mono text-3xl font-extrabold tracking-tight text-slate-900"><span id="blink">0</span> <span class="text-lg font-medium text-slate-400">/min</span></div>
+<div class="text-xs text-slate-500">Recent nods <span id="nods" class="font-mono font-bold text-slate-700">0</span></div>
+</div>
+</div>
+<div class="mt-4 pt-2">
+<svg class="h-16 w-full overflow-visible" preserveAspectRatio="none" viewBox="0 0 300 60">
+<defs><linearGradient id="blinkGradient" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#475569" stop-opacity="0.2"></stop><stop offset="100%" stop-color="#475569" stop-opacity="0"></stop></linearGradient></defs>
+<path id="blinkFill" d="" fill="url(#blinkGradient)"></path>
+<path id="blinkPath" d="" fill="none" stroke="#475569" stroke-linecap="round" stroke-width="2"></path>
+</svg>
+</div>
+</div>
+
+<div class="liquid-card flex flex-col justify-between rounded-2xl p-5">
+<div>
+<div class="flex items-center justify-between">
+<span class="text-xs font-semibold uppercase tracking-wider text-slate-500">Yawning (MAR)</span>
+<span id="marChip" class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">—</span>
+</div>
+<div class="mt-2 flex items-baseline gap-2">
+<div class="font-mono text-3xl font-extrabold tracking-tight text-slate-900"><span id="mar">0</span> <span class="text-base font-normal text-slate-400">yawns</span></div>
+<div class="text-xs text-slate-500">Mouth opening <span id="marValue" class="font-mono font-medium text-slate-700">0.00</span></div>
+</div>
+</div>
+<div class="mt-4 pt-2">
+<svg class="h-16 w-full overflow-visible" preserveAspectRatio="none" viewBox="0 0 300 60">
+<path id="marPath" d="" fill="none" stroke="#64748b" stroke-linecap="round" stroke-width="2"></path>
+</svg>
+</div>
+</div>
+
+<div class="liquid-card flex flex-col justify-between rounded-2xl p-5">
+<div>
+<div class="flex items-center justify-between">
+<span class="text-xs font-semibold uppercase tracking-wider text-slate-500">Head turn</span>
+<span id="yawChip" class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700 ring-1 ring-slate-300/60">—</span>
+</div>
+<div class="mt-2 flex items-baseline gap-2">
+<div id="yaw" class="font-mono text-3xl font-extrabold tracking-tight text-slate-900">+0.0°</div>
+<div class="text-xs text-slate-400">Off-road trigger at <span class="font-mono font-medium text-slate-600">25°</span></div>
+</div>
+</div>
+<div class="mt-4 pt-2">
+<svg class="h-16 w-full overflow-visible" preserveAspectRatio="none" viewBox="0 0 300 60">
+<defs><linearGradient id="headTurnGrad" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#475569" stop-opacity="0.22"></stop><stop offset="100%" stop-color="#475569" stop-opacity="0"></stop></linearGradient></defs>
+<path id="yawFill" d="" fill="url(#headTurnGrad)"></path>
+<path id="yawPath" d="" fill="none" stroke="#334155" stroke-linecap="round" stroke-width="2"></path>
+</svg>
+</div>
+</div>
+
+<div class="liquid-card flex flex-col justify-between rounded-2xl p-5">
+<div>
+<div class="flex items-center justify-between">
+<span class="text-xs font-semibold uppercase tracking-wider text-slate-500">Head nod &amp; tilt</span>
+<span id="pitchChip" class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">—</span>
+</div>
+<div class="mt-2 flex items-baseline justify-between">
+<div id="pitch" class="font-mono text-3xl font-extrabold tracking-tight text-slate-900">+0.0°</div>
+<div id="roll" class="font-mono text-xs font-semibold text-slate-600">Roll +0.0°</div>
+</div>
+<div class="mt-2 h-1.5 w-full rounded-full bg-slate-200/80"><div id="pitchBar" class="h-1.5 rounded-full bg-gradient-to-r from-slate-400 to-slate-600" style="width: 0%"></div></div>
+</div>
+<div class="mt-4 pt-2">
+<svg class="h-16 w-full overflow-visible" preserveAspectRatio="none" viewBox="0 0 300 60">
+<defs><linearGradient id="nodGradient" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#64748b" stop-opacity="0.2"></stop><stop offset="100%" stop-color="#64748b" stop-opacity="0"></stop></linearGradient></defs>
+<path id="pitchFill" d="" fill="url(#nodGradient)"></path>
+<path id="pitchPath" d="" fill="none" stroke="#475569" stroke-linecap="round" stroke-width="2"></path>
+</svg>
+</div>
+</div>
+</section>
+
+<section class="grid grid-cols-1 gap-5 lg:grid-cols-12" data-purpose="deep-dive-panels">
+<div class="liquid-card flex flex-col justify-between rounded-3xl p-6 lg:col-span-4">
+<div>
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2"><span class="h-2 w-2 rounded-full bg-slate-600"></span><h3 class="text-sm font-bold text-slate-900">Risk profile</h3></div>
+<span class="text-xs text-slate-400">Fusion weights</span>
+</div>
+<p class="mt-1 text-xs text-slate-500">Live per-cue contribution to the score</p>
+</div>
+<div class="my-4 flex items-center justify-center py-2">
+<svg class="h-52 w-52 overflow-visible" viewBox="0 0 200 200">
+<polygon fill="none" points="100,20 170,60 170,140 100,180 30,140 30,60" stroke="#cbd5e1" stroke-dasharray="2 2" stroke-width="1"></polygon>
+<polygon fill="none" points="100,45 150,72 150,128 100,155 50,128 50,72" stroke="#e2e8f0" stroke-width="1"></polygon>
+<polygon fill="none" points="100,70 125,85 125,115 100,130 75,115 75,85" stroke="#f1f5f9" stroke-width="1"></polygon>
+<line stroke="#e2e8f0" stroke-width="1" x1="100" x2="100" y1="20" y2="180"></line>
+<line stroke="#e2e8f0" stroke-width="1" x1="30" x2="170" y1="60" y2="140"></line>
+<line stroke="#e2e8f0" stroke-width="1" x1="30" x2="170" y1="140" y2="60"></line>
+<polygon id="radarShape" fill="rgba(71, 85, 105, 0.16)" points="100,100 100,100 100,100 100,100 100,100 100,100" stroke="#475569" stroke-width="2"></polygon>
+<text class="fill-slate-500 font-sans text-[10px] font-semibold" text-anchor="middle" x="100" y="12">Eye closure</text>
+<text class="fill-slate-500 font-sans text-[10px] font-semibold" text-anchor="start" x="180" y="65">Microsleep</text>
+<text class="fill-slate-500 font-sans text-[10px] font-semibold" text-anchor="start" x="180" y="145">Head nod</text>
+<text class="fill-slate-500 font-sans text-[10px] font-semibold" text-anchor="middle" x="100" y="195">Yawn</text>
+<text class="fill-slate-500 font-sans text-[10px] font-semibold" text-anchor="end" x="20" y="145">Phone</text>
+<text class="fill-slate-500 font-sans text-[10px] font-semibold" text-anchor="end" x="20" y="65">Off-road</text>
+</svg>
+</div>
+<div class="flex items-center justify-between rounded-xl bg-slate-100/70 p-2.5 text-xs">
+<span class="text-slate-500">Highest Sensitivity:</span>
+<span id="radarTop" class="font-semibold text-slate-800">—</span>
+</div>
+</div>
+
+<div class="liquid-card flex flex-col justify-between rounded-3xl p-6 lg:col-span-4">
+<div>
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2"><span class="h-2 w-2 rounded-full bg-slate-600"></span><h3 class="text-sm font-bold text-slate-900">Score traces</h3></div>
+<div class="flex items-center gap-1 rounded-xl bg-slate-100/90 p-1 text-xs">
+<button data-trace="both" class="trace-btn rounded-lg bg-white px-2.5 py-0.5 font-semibold text-slate-800 shadow-sm" type="button">Both</button>
+<button data-trace="drowsy" class="trace-btn rounded-lg px-2.5 py-0.5 font-medium text-slate-500 hover:text-slate-900" type="button">Drowsy</button>
+<button data-trace="distract" class="trace-btn rounded-lg px-2.5 py-0.5 font-medium text-slate-500 hover:text-slate-900" type="button">Distract</button>
+</div>
+</div>
+<p class="mt-1 text-xs text-slate-500">Fused drowsiness vs distraction over the recent window</p>
+</div>
+<div class="my-4 py-2">
+<svg class="h-48 w-full overflow-visible" preserveAspectRatio="none" viewBox="0 0 320 140">
+<line stroke="#f1f5f9" stroke-width="1" x1="0" x2="320" y1="20" y2="20"></line>
+<line stroke="#f1f5f9" stroke-width="1" x1="0" x2="320" y1="60" y2="60"></line>
+<line stroke="#f1f5f9" stroke-width="1" x1="0" x2="320" y1="100" y2="100"></line>
+<path id="tracePrimary" d="" fill="none" stroke="#334155" stroke-linecap="round" stroke-width="2.5"></path>
+<path id="traceSecondary" d="" fill="none" stroke="#94a3b8" stroke-dasharray="4 4" stroke-linecap="round" stroke-width="2"></path>
+</svg>
+</div>
+<div class="flex items-center justify-between text-xs text-slate-500">
+<div class="flex items-center gap-2"><span class="h-2 w-2 rounded-full bg-slate-700"></span><span>Drowsiness</span></div>
+<div class="flex items-center gap-2"><span class="h-2 w-2 rounded-full bg-slate-400"></span><span>Distraction</span></div>
+<span class="font-mono text-[11px] text-slate-400">recent window</span>
+</div>
+</div>
+
+<div class="liquid-card flex flex-col rounded-3xl p-6 lg:col-span-4">
+<div>
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2"><span class="h-2 w-2 rounded-full bg-slate-600"></span><h3 class="text-sm font-bold text-slate-900">Live alerts</h3></div>
+<span class="text-xs text-slate-400">newest first</span>
+</div>
+<div class="mt-3 flex flex-wrap gap-1.5 text-xs">
+<button data-filter="all" id="alertsAll" class="filter-btn rounded-full bg-slate-900 px-2.5 py-0.5 font-semibold text-white" type="button">All 0</button>
+<button data-filter="Fatigue" id="alertsFatigue" class="filter-btn rounded-full bg-slate-100 px-2.5 py-0.5 font-medium text-slate-600 ring-1 ring-slate-300/60 hover:bg-slate-200" type="button">Fatigue 0</button>
+<button data-filter="Distract" id="alertsDistract" class="filter-btn rounded-full bg-slate-100 px-2.5 py-0.5 font-medium text-slate-600 hover:bg-slate-200" type="button">Distract 0</button>
+<button data-filter="critical" id="alertsCritical" class="filter-btn rounded-full bg-slate-100 px-2.5 py-0.5 font-medium text-slate-600 hover:bg-slate-200" type="button">Critical 0</button>
+<button data-filter="Camera" id="alertsCamera" class="filter-btn rounded-full bg-slate-100 px-2.5 py-0.5 font-medium text-slate-600 hover:bg-slate-200" type="button">Camera 0</button>
+</div>
+<div class="relative mt-3">
+<input id="alertSearch" class="w-full rounded-xl border-0 bg-slate-100/80 px-3 py-1.5 text-xs text-slate-800 placeholder-slate-400 focus:bg-white focus:ring-2 focus:ring-slate-400/40" placeholder="Search alerts..." type="text">
+<svg class="pointer-events-none absolute right-3 top-2 h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+</div>
+</div>
+<div id="alertList" class="mt-3.5 max-h-56 space-y-2 overflow-y-auto pr-1">
+<div class="px-1 py-6 text-center text-xs text-slate-400">No alerts this session.</div>
+</div>
+</div>
+</section>
+</div>
+
+<!-- ============================ VIEW: FATIGUE TRENDS ============================ -->
+<div id="view-trends" class="view space-y-5" hidden>
+<section class="grid grid-cols-2 gap-3.5 lg:grid-cols-6">
+<div class="liquid-card rounded-2xl p-4"><div class="text-xs font-semibold uppercase tracking-wider text-slate-500">PERCLOS</div><div id="trendPerclos" class="mt-2 font-mono text-2xl font-bold text-slate-900">0.0%</div></div>
+<div class="liquid-card rounded-2xl p-4"><div class="text-xs font-semibold uppercase tracking-wider text-slate-500">Blink rate</div><div id="trendBlink" class="mt-2 font-mono text-2xl font-bold text-slate-900">0/min</div></div>
+<div class="liquid-card rounded-2xl p-4"><div class="text-xs font-semibold uppercase tracking-wider text-slate-500">Yawn rate</div><div id="trendYawn" class="mt-2 font-mono text-2xl font-bold text-slate-900">0.0/min</div></div>
+<div class="liquid-card rounded-2xl p-4"><div class="text-xs font-semibold uppercase tracking-wider text-slate-500">Microsleeps</div><div id="trendMicro" class="mt-2 font-mono text-2xl font-bold text-slate-900">0</div></div>
+<div class="liquid-card rounded-2xl p-4"><div class="text-xs font-semibold uppercase tracking-wider text-slate-500">Drowsy score</div><div id="trendDrowsy" class="mt-2 font-mono text-2xl font-bold text-slate-900">0%</div></div>
+<div class="liquid-card rounded-2xl p-4"><div class="text-xs font-semibold uppercase tracking-wider text-slate-500">Distract score</div><div id="trendDistract" class="mt-2 font-mono text-2xl font-bold text-slate-900">0%</div></div>
+</section>
+<section class="grid grid-cols-1 gap-5 xl:grid-cols-2">
+<div class="liquid-card rounded-3xl p-6">
+<h3 class="text-sm font-bold text-slate-900">Eye opening (EAR)</h3>
+<p class="mt-1 text-xs text-slate-500">Closure dips below the calibrated personal limit</p>
+<svg class="mt-4 h-40 w-full" preserveAspectRatio="none" viewBox="0 0 640 160"><path id="trendEarPath" d="" fill="none" stroke="#334155" stroke-linecap="round" stroke-width="2.5"></path></svg>
+</div>
+<div class="liquid-card rounded-3xl p-6">
+<h3 class="text-sm font-bold text-slate-900">PERCLOS</h3>
+<p class="mt-1 text-xs text-slate-500">Rolling fraction of time the eyes are closed</p>
+<svg class="mt-4 h-40 w-full" preserveAspectRatio="none" viewBox="0 0 640 160"><path id="trendPerclosPath" d="" fill="none" stroke="#64748b" stroke-linecap="round" stroke-width="2.5"></path></svg>
+</div>
+<div class="liquid-card rounded-3xl p-6">
+<h3 class="text-sm font-bold text-slate-900">Drowsiness score</h3>
+<p class="mt-1 text-xs text-slate-500">Fused physiological cues, 0 to 1</p>
+<svg class="mt-4 h-40 w-full" preserveAspectRatio="none" viewBox="0 0 640 160"><path id="trendScorePath" d="" fill="none" stroke="#334155" stroke-linecap="round" stroke-width="2.5"></path></svg>
+</div>
+<div class="liquid-card rounded-3xl p-6">
+<h3 class="text-sm font-bold text-slate-900">Distraction score</h3>
+<p class="mt-1 text-xs text-slate-500">Gaze, head pose, phone and hands cues</p>
+<svg class="mt-4 h-40 w-full" preserveAspectRatio="none" viewBox="0 0 640 160"><path id="trendDistractPath" d="" fill="none" stroke="#94a3b8" stroke-linecap="round" stroke-width="2.5"></path></svg>
+</div>
+</section>
+</div>
+
+<!-- ============================ VIEW: CAMERA & GAZE ============================ -->
+<div id="view-camera" class="view space-y-5" hidden>
+<section class="grid grid-cols-1 gap-5 xl:grid-cols-3">
+<div class="liquid-card rounded-3xl p-5 xl:col-span-2">
+<div class="mb-3 flex items-center justify-between">
+<h3 class="text-sm font-bold text-slate-900">Annotated sensor feed</h3>
+<span class="font-mono text-[10px] text-slate-500">Face mesh · pose axis · wheel ROI · detections</span>
+</div>
+<div class="relative aspect-[16/9] w-full overflow-hidden rounded-2xl border border-slate-700/60 bg-[#0b0f17]">
+<div id="feedSlotCamera" class="absolute inset-0"></div>
+</div>
+</div>
+<div class="space-y-4">
+<div class="liquid-card rounded-2xl p-5">
+<div class="flex items-center justify-between"><span class="text-xs font-semibold uppercase tracking-wider text-slate-500">Gaze</span><span id="gazeChip" class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">—</span></div>
+<div class="mt-3 grid grid-cols-3 gap-3 text-center">
+<div><div class="text-[10px] uppercase tracking-wider text-slate-400">Horiz</div><div id="gazeH" class="font-mono text-lg font-bold text-slate-900">0.50</div></div>
+<div><div class="text-[10px] uppercase tracking-wider text-slate-400">Vert</div><div id="gazeV" class="font-mono text-lg font-bold text-slate-900">0.50</div></div>
+<div><div class="text-[10px] uppercase tracking-wider text-slate-400">Off road</div><div id="gazeOff" class="font-mono text-lg font-bold text-slate-900">0%</div></div>
+</div>
+</div>
+<div class="liquid-card rounded-2xl p-5">
+<div class="flex items-center justify-between"><span class="text-xs font-semibold uppercase tracking-wider text-slate-500">Phone</span><span id="phoneChip" class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">—</span></div>
+<div id="phoneVal" class="mt-2 font-mono text-2xl font-bold text-slate-900">0%</div>
+<div class="mt-1 text-[11px] text-slate-500">YOLO detection confidence</div>
+</div>
+<div class="liquid-card rounded-2xl p-5">
+<div class="flex items-center justify-between"><span class="text-xs font-semibold uppercase tracking-wider text-slate-500">Hands on wheel</span><span id="handsChip" class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">—</span></div>
+<div id="handsVal" class="mt-2 font-mono text-2xl font-bold text-slate-900">0/0</div>
+<div class="mt-1 text-[11px] text-slate-500">Inside wheel ROI / detected</div>
+</div>
+<div class="liquid-card rounded-2xl p-5">
+<div class="flex items-center justify-between"><span class="text-xs font-semibold uppercase tracking-wider text-slate-500">CNN drowsiness</span><span id="cnnChip" class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">—</span></div>
+<div id="cnnVal" class="mt-2 font-mono text-2xl font-bold text-slate-900">n/a</div>
+<div class="mt-1 text-[11px] text-slate-500">Eyes closed for <span id="closedVal" class="font-mono text-slate-700">0.0s</span></div>
+</div>
+</div>
+</section>
+</div>
+
+<!-- ============================ VIEW: INCIDENT LOG ============================ -->
+<div id="view-incidents" class="view space-y-5" hidden>
+<section class="liquid-card rounded-3xl p-6">
+<div class="flex flex-wrap items-center justify-between gap-3">
+<div>
+<h3 class="text-sm font-bold text-slate-900">Incident log</h3>
+<p class="mt-1 text-xs text-slate-500">Every alert raised in this session, newest first</p>
+</div>
+<input id="incidentSearch" class="w-56 rounded-xl border-0 bg-slate-100/80 px-3 py-1.5 text-xs text-slate-800 placeholder-slate-400 focus:bg-white focus:ring-2 focus:ring-slate-400/40" placeholder="Search incidents..." type="text">
+</div>
+<div class="mt-4 overflow-hidden rounded-2xl border border-slate-200/70">
+<table class="w-full text-left">
+<thead class="bg-slate-100/70 text-[10px] uppercase tracking-wider text-slate-500">
+<tr><th class="px-4 py-2 font-semibold">Time</th><th class="px-4 py-2 font-semibold">Kind</th><th class="px-4 py-2 font-semibold">Level</th><th class="px-4 py-2 font-semibold">Message</th></tr>
+</thead>
+<tbody id="incidentList">
+<tr><td class="px-4 py-6 text-center text-xs text-slate-400" colspan="4">No incidents recorded this session.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+</div>
+
+<!-- ============================ VIEW: FLEET BOARD ============================ -->
+<div id="view-fleet" class="view space-y-5" hidden>
+<section class="liquid-card rounded-3xl p-6">
+<div class="flex items-center justify-between">
+<div>
+<h3 class="text-sm font-bold text-slate-900">Fleet board</h3>
+<p class="mt-1 text-xs text-slate-500">Recorded sessions from the SQLite event store</p>
+</div>
+<button id="fleetRefresh" class="liquid-pill rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-700" type="button">Refresh</button>
+</div>
+<div class="mt-4 overflow-x-auto rounded-2xl border border-slate-200/70">
+<table class="w-full text-left">
+<thead class="bg-slate-100/70 text-[10px] uppercase tracking-wider text-slate-500">
+<tr><th class="px-4 py-2 font-semibold">Started</th><th class="px-4 py-2 font-semibold">Driver</th><th class="px-4 py-2 font-semibold">Vehicle</th><th class="px-4 py-2 font-semibold">Frames</th><th class="px-4 py-2 font-semibold">FPS</th><th class="px-4 py-2 font-semibold">Alerts</th><th class="px-4 py-2 font-semibold">Critical</th><th class="px-4 py-2 font-semibold">Peak drowsy</th></tr>
+</thead>
+<tbody id="fleetList">
+<tr><td class="px-4 py-6 text-center text-xs text-slate-400" colspan="8">Loading…</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+</div>
+
+</main>
+</div>
+
+<footer class="mt-auto border-t border-white/60 bg-white/40 py-3 text-center text-xs text-slate-400 backdrop-blur-md">
+<div class="mx-auto flex max-w-[1780px] items-center justify-between px-5 sm:px-8">
+<div>VigilEye Core v2.4 • Edge Neural Engine</div>
+<div class="flex items-center gap-4">
+<span class="inline-flex items-center gap-1.5"><span id="linkDot" class="h-1.5 w-1.5 rounded-full bg-slate-500"></span> <span id="linkText">Sensor link</span></span>
+<span id="bufferText">Buffer: Synced</span>
+</div>
+</div>
+</footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  const $ = (id) => document.getElementById(id);
+  const POLL_MS = 400;
+
+  /* ---------- live camera stream, moved between the views that show it ---- */
+  const feed = document.createElement("img");
+  feed.id = "feed";
+  feed.alt = "Annotated cabin camera feed";
+  feed.src = "/video";
+  $("feedSlotCockpit").appendChild(feed);
+
+  /* ---------- view switching ------------------------------------------- */
+  const views = ["cockpit", "trends", "camera", "incidents", "fleet"];
+  const activeNav = ["bg-white/80", "text-slate-900", "font-semibold", "ring-1", "ring-slate-300/60"];
+
+  function showView(name) {
+    if (!views.includes(name)) name = "cockpit";
+    views.forEach((v) => { $("view-" + v).hidden = v !== name; });
+
+    document.querySelectorAll(".nav-link").forEach((link) => {
+      const on = link.dataset.view === name;
+      link.classList.toggle("text-slate-600", !on);
+      activeNav.forEach((c) => link.classList.toggle(c, on));
+      const icon = link.querySelector(".nav-icon");
+      icon.classList.toggle("bg-slate-800", on);
+      icon.classList.toggle("text-white", on);
+      icon.classList.toggle("bg-slate-100", !on);
+      icon.classList.toggle("text-slate-500", !on);
+    });
+
+    // One <img> means one MJPEG connection, so relocate it rather than clone.
+    const slot = name === "camera" ? $("feedSlotCamera") : $("feedSlotCockpit");
+    if (feed.parentElement !== slot) slot.appendChild(feed);
+    if (name === "fleet") loadFleet();
+    history.replaceState(null, "", "#" + name);
+  }
+
+  document.querySelectorAll(".nav-link").forEach((link) => {
+    link.addEventListener("click", (e) => { e.preventDefault(); showView(link.dataset.view); });
+  });
+
+  /* ---------- controls -------------------------------------------------- */
+  let muted = false;
+
+  function send(action) {
+    return fetch("/api/command", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: action }),
+    }).catch(() => {});
+  }
+
+  document.querySelectorAll("[data-cmd]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const cmd = btn.dataset.cmd;
+      if (cmd === "mute") {
+        send(muted ? "unmute" : "mute");
+      } else if (cmd === "stop") {
+        if (confirm("Stop the VigilEye session? The camera and logging will shut down.")) send("stop");
+      } else {
+        send(cmd);
+      }
+    });
+  });
+
+  // The desktop shortcuts still work while the page has focus.
+  document.addEventListener("keydown", (e) => {
+    if (e.target.tagName === "INPUT" || e.metaKey || e.ctrlKey || e.altKey) return;
+    const key = e.key.toLowerCase();
+    if (key === "c") send("recalibrate");
+    else if (key === "m") send(muted ? "unmute" : "mute");
+    else if (key === "s") send("snapshot");
+    else if (key >= "1" && key <= "5") showView(views[Number(key) - 1]);
+  });
+
+  /* ---------- alert filtering ------------------------------------------ */
+  let alertFilter = "all";
+
+  function applyFilter(container, query) {
+    container.querySelectorAll(".alert-row").forEach((row) => {
+      const kindOk =
+        alertFilter === "all" ||
+        (alertFilter === "critical" ? row.dataset.level === "2" : row.dataset.kind === alertFilter);
+      const textOk = !query || (row.dataset.text || "").includes(query);
+      row.style.display = kindOk && textOk ? "" : "none";
+    });
+  }
+
+  function refreshFilters() {
+    applyFilter($("alertList"), $("alertSearch").value.trim().toLowerCase());
+    applyFilter($("incidentList"), $("incidentSearch").value.trim().toLowerCase());
+  }
+
+  document.querySelectorAll(".filter-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      alertFilter = btn.dataset.filter;
+      document.querySelectorAll(".filter-btn").forEach((b) => {
+        const on = b === btn;
+        b.classList.toggle("bg-slate-900", on);
+        b.classList.toggle("text-white", on);
+        b.classList.toggle("font-semibold", on);
+        b.classList.toggle("bg-slate-100", !on);
+        b.classList.toggle("text-slate-600", !on);
+      });
+      refreshFilters();
+    });
+  });
+  $("alertSearch").addEventListener("input", refreshFilters);
+  $("incidentSearch").addEventListener("input", refreshFilters);
+
+  /* ---------- score trace toggle --------------------------------------- */
+  document.querySelectorAll(".trace-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const mode = btn.dataset.trace;
+      $("tracePrimary").style.display = mode === "distract" ? "none" : "";
+      $("traceSecondary").style.display = mode === "drowsy" ? "none" : "";
+      document.querySelectorAll(".trace-btn").forEach((b) => {
+        const on = b === btn;
+        b.classList.toggle("bg-white", on);
+        b.classList.toggle("shadow-sm", on);
+        b.classList.toggle("font-semibold", on);
+        b.classList.toggle("text-slate-800", on);
+        b.classList.toggle("text-slate-500", !on);
+      });
+    });
+  });
+
+  /* ---------- fleet board ---------------------------------------------- */
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (ch) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+
+  async function loadFleet() {
+    const body = $("fleetList");
+    try {
+      const data = await (await fetch("/api/fleet")).json();
+      const rows = data.sessions || [];
+      if (!rows.length) {
+        body.innerHTML = '<tr><td class="px-4 py-6 text-center text-xs text-slate-400" colspan="8">' +
+          esc(data.note || "No sessions recorded yet.") + "</td></tr>";
+        return;
+      }
+      body.innerHTML = rows.map((r) => {
+        const started = r.started_at ? String(r.started_at).replace("T", " ").slice(0, 19) : "—";
+        const peak = r.peak_drowsy == null ? "—" : (r.peak_drowsy * 100).toFixed(0) + "%";
+        return '<tr class="border-t border-slate-200/70 hover:bg-white/60">' +
+          '<td class="px-4 py-2 font-mono text-xs text-slate-600">' + esc(started) + "</td>" +
+          '<td class="px-4 py-2 text-xs font-semibold text-slate-800">' + esc(r.driver_id) + "</td>" +
+          '<td class="px-4 py-2 text-xs text-slate-700">' + esc(r.vehicle_id) + "</td>" +
+          '<td class="px-4 py-2 font-mono text-xs text-slate-600">' + esc(r.frames || 0) + "</td>" +
+          '<td class="px-4 py-2 font-mono text-xs text-slate-600">' + (r.mean_fps || 0).toFixed(1) + "</td>" +
+          '<td class="px-4 py-2 font-mono text-xs text-slate-800">' + esc(r.alerts || 0) + "</td>" +
+          '<td class="px-4 py-2 font-mono text-xs text-slate-800">' + esc(r.critical || 0) + "</td>" +
+          '<td class="px-4 py-2 font-mono text-xs text-slate-600">' + peak + "</td></tr>";
+      }).join("");
+    } catch (err) {
+      body.innerHTML = '<tr><td class="px-4 py-6 text-center text-xs text-slate-400" colspan="8">' +
+        "Fleet data unavailable.</td></tr>";
+    }
+  }
+  $("fleetRefresh").addEventListener("click", loadFleet);
+
+  /* ---------- telemetry polling ---------------------------------------- */
+  function setLink(ok, note) {
+    $("linkDot").className = "h-1.5 w-1.5 rounded-full " + (ok ? "bg-slate-500" : "bg-slate-300");
+    $("linkText").textContent = ok ? "Sensor link 100%" : "Sensor link lost";
+    $("bufferText").textContent = note;
+  }
+
+  async function poll() {
+    let data;
+    try {
+      data = await (await fetch("/api/telemetry", { cache: "no-store" })).json();
+    } catch (err) {
+      setLink(false, "Buffer: disconnected");
+      $("hdrFeed").textContent = "OFFLINE";
+      return;
+    }
+
+    if (!data || !data.text) {
+      setLink(true, "Buffer: warming up");
+      return;
+    }
+
+    for (const [id, value] of Object.entries(data.text)) {
+      const el = $(id);
+      if (el && el.textContent !== value) el.textContent = value;
+    }
+    for (const [id, value] of Object.entries(data.width || {})) {
+      const el = $(id);
+      if (el) el.style.width = value;
+    }
+    for (const [id, attrs] of Object.entries(data.attr || {})) {
+      const el = $(id);
+      if (!el) continue;
+      for (const [name, value] of Object.entries(attrs)) el.setAttribute(name, value);
+    }
+
+    let listsChanged = false;
+    for (const [id, markup] of Object.entries(data.html || {})) {
+      const el = $(id);
+      if (el && el.innerHTML !== markup) { el.innerHTML = markup; listsChanged = true; }
+    }
+    if (listsChanged) refreshFilters();
+
+    muted = Boolean(data.muted);
+    $("muteLabel").textContent = muted ? "Unmute" : "Mute";
+    $("muteBtn").classList.toggle("ring-2", muted);
+    $("muteBtn").classList.toggle("ring-slate-400/60", muted);
+
+    $("calibRibbon").hidden = !data.calibrating;
+    $("heroBanner").classList.toggle("flashing", data.state === "DROWSY" || data.state === "DISTRACTED");
+    $("navIncidents").textContent = ($("incidentList").querySelectorAll(".alert-row").length) || 0;
+    setLink(true, "Buffer: synced");
+  }
+
+  showView((location.hash || "#cockpit").slice(1));
+  poll();
+  setInterval(poll, POLL_MS);
+})();
+</script>
+</body>
+</html>

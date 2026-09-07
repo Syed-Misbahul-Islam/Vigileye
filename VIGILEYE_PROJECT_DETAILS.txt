@@ -1,0 +1,1327 @@
+================================================================================
+VIGILEYE - COMPLETE PROJECT DOCUMENTATION
+Real-time multimodal driver drowsiness, fatigue and distraction detection
+Smart India Hackathon 2026
+================================================================================
+Generated: 7 September 2026
+Repository root: d:\My Projects\Vigileye-main
+Python: 3.12.10 (Windows, CPU only - torch.cuda.is_available() == False)
+
+CONTENTS
+  1.  What the system is
+  2.  Current build status (what works, what does not)
+  3.  How to run it
+  4.  Architecture and data flow
+  5.  Repository layout
+  6.  Module-by-module reference
+  7.  The Signals record (every measured value)
+  8.  Fusion: scoring, hysteresis and states
+  9.  Calibration
+  10. Alerts and escalation
+  11. Configuration reference (config.yaml)
+  12. The web UI "Command Deck"
+  13. Logging, CSV schema and SQLite schema
+  14. CNN drowsiness classifier (MobileNetV3)
+  15. Temporal LSTM fusion model (v2)
+  16. Streamlit fleet dashboard
+  17. RASPBERRY PI PICO IMPLEMENTATION  <-- full detail, incl. firmware
+  18. Measured performance
+  19. Dependencies
+  20. Test suite
+  21. Known limitations
+  22. Troubleshooting
+
+
+================================================================================
+1. WHAT THE SYSTEM IS
+================================================================================
+
+VigilEye is a camera-only driver monitoring system. A single driver-facing
+camera feeds a perception pipeline that measures eye closure, yawning, head
+pose, gaze direction, phone presence and hands-on-wheel, then fuses those cues
+into one stable driver state:
+
+    ALERT | DROWSY | DISTRACTED | NO_DRIVER
+
+When the state is unsafe it raises escalating audio alerts, logs the event to
+SQLite, drives an optional Raspberry Pi Pico for external hardware signalling,
+and renders everything live in a browser dashboard.
+
+Three design decisions define the project:
+
+(a) Drowsiness and distraction are scored SEPARATELY, never collapsed into one
+    "risk" number. They demand opposite interventions: a drowsy driver must
+    stop and rest, a distracted driver must look up immediately.
+
+(b) Thresholds are PER-DRIVER, derived from a 10-second calibration, not
+    hard-coded. A fixed EAR threshold of 0.21 is the single largest source of
+    false positives in published drowsiness systems, because eye aperture
+    varies enormously between people and drivers with narrow eyes or glasses
+    sit permanently below it. Calibration also captures camera placement,
+    without which head-pose thresholds are meaningless.
+
+(c) Every state change passes through HYSTERESIS: 8 confirming frames to enter
+    an unsafe state, 20 to leave it, and a 1.5 s minimum dwell. This is the
+    difference between a system a driver tolerates and one they unplug.
+
+
+================================================================================
+2. CURRENT BUILD STATUS
+================================================================================
+
+WORKING AND VERIFIED
+  - Full perception pipeline (face mesh, EAR/MAR/PERCLOS, blinks, micro-sleeps,
+    yawns, head pose, nod/turn detection, iris gaze, YOLO phone detection,
+    hands-on-wheel).
+  - Rule-based fusion with hysteresis; ALERT/DROWSY/DISTRACTED/NO_DRIVER.
+  - Escalating audio alerts with cooldown (sounddevice backend present).
+  - Per-driver calibration, cached to calibration.json.
+  - Per-frame CSV logging and SQLite event store.
+  - Browser "Command Deck" UI: live MJPEG video, all metrics, charts, alert
+    feed, incident log, fleet board, and full session control.
+  - Optional Raspberry Pi Pico serial link on the host side.
+  - Streamlit fleet analytics dashboard.
+  - Verified live runs: 220 frames / 45.4 s and 384 frames / 96.4 s, with
+    DROWSY, DISTRACTED and NO_DRIVER alerts firing correctly.
+
+NOT YET DONE
+  - models/drowsiness_model.pth does NOT exist. The MobileNetV3 CNN has never
+    been trained, so the CNN cue contributes nothing. The pipeline now loads it
+    optionally and degrades to rules only (see section 14). The dataset and the
+    training script are both present and ready to run.
+  - models/vigileye_lstm.pt does NOT exist. The v2 temporal LSTM is untrained,
+    so --mode temporal and --mode hybrid silently fall back to rules.
+  - No Pico firmware is stored in this repository. The host half of the link is
+    implemented and working; the device half is specified with a complete
+    reference implementation in section 17, but it has not been committed as a
+    file or flashed to a board.
+  - No COM7 device was attached during testing, so the Pico path has only been
+    exercised through its failure branch (it correctly reports the port as
+    offline once and keeps running).
+  - The "validated for Indian conditions" claim in the abstract is design
+    intent, not a measured result. It needs your own labelled footage.
+
+
+================================================================================
+3. HOW TO RUN IT
+================================================================================
+
+Primary command - starts camera, serves the UI, opens the browser:
+
+    python run.py
+
+The terminal prints the URL, normally http://127.0.0.1:8000/. On first launch
+the system spends 10 seconds calibrating: look straight ahead and hold a
+neutral expression. The baseline is cached to calibration.json and reused.
+
+Command-line flags (run.py):
+
+  --config PATH        config file (default config.yaml)
+  --source X           camera index or video file path
+  --mode MODE          rule | temporal | hybrid
+  --driver-id ID       label written into logs (default driver_01)
+  --vehicle-id ID      label written into logs (default vehicle_01)
+  --no-objects         disable YOLO + hands (low-power mode, much faster)
+  --no-alerts          disable audio alerting
+  --no-log             disable CSV + SQLite logging
+  --recalibrate        delete the cached baseline and calibrate fresh
+  --headless           no OpenCV window and no browser tab
+  --record PATH        write the annotated video to an .mp4
+  --no-ui              disable the browser cockpit entirely
+  --ui-port N          UI port (default 8000; auto-advances if busy)
+  --ui-host H          UI bind address (default 127.0.0.1)
+  --no-browser         serve the UI but do not open a tab
+  --window             also show the legacy OpenCV window
+
+Keyboard, in the OpenCV window (--window):
+  q quit | c recalibrate | m mute | h hide HUD | s save frame
+
+Keyboard, in the browser:
+  c recalibrate | m mute/unmute | s snapshot | 1-5 switch views
+
+Other entry points:
+
+    streamlit run dashboard/app.py            fleet analytics over SQLite
+    python training/train_drowsiness.py       train the MobileNetV3 CNN
+    python test_cnn_live.py                   CNN-only live test window
+    python -m vigileye.landmarks              print the MediaPipe backend
+    python -m vigileye.landmarks --download    pre-fetch Tasks model bundles
+    pytest -q                                 run the unit tests
+
+    python scripts/collect_features.py --videos data/videos --out data/features.csv
+    python scripts/train_fusion.py --features data/features.csv --epochs 40
+    python scripts/evaluate.py model --features data/features.csv
+    python scripts/evaluate.py rules --videos data/videos
+    python scripts/evaluate.py speed --source 0 --frames 200
+
+
+================================================================================
+4. ARCHITECTURE AND DATA FLOW
+================================================================================
+
+  camera / video file
+        |
+   VideoStream (threaded, drops stale frames)
+        |
+        v
+  VigilEyePipeline.process(frame, ts)
+        |
+        +-- FaceMeshDetector ........ 478 landmarks (MediaPipe, both APIs)
+        |     +-- both_eyes_ear ..... EAR -> BlinkDetector -> blinks,
+        |     |                        micro-sleeps, closed duration
+        |     |                        -> PerclosTracker -> PERCLOS
+        |     +-- mouth_aspect_ratio  MAR -> YawnDetector -> yawns
+        |     +-- HeadPoseEstimator   solvePnP -> yaw/pitch/roll
+        |     |     +-- NodDetector ......... head-drop events
+        |     |     +-- HeadTurnDetector .... sustained yaw
+        |     +-- GazeEstimator ...... iris h/v ratio -> eyes-off-road window
+        |     +-- CNNDrowsinessPredictor (optional) -> drowsy probability
+        |
+        +-- PhoneDetector ........... YOLOv8n, 1-in-N frames, persistence
+        +-- HandsOnWheelDetector .... MediaPipe Hands + wheel ROI
+        |
+        v
+  Signals  (one flat record per frame)
+        |
+        v
+  RuleFusion.score -> drowsy_score, distract_score, contributions
+  RuleFusion.update -> hysteresis state machine -> FusionResult
+  (HybridFusion blends in TemporalFusion when a checkpoint exists)
+        |
+        +--> AlertManager ......... audio, cooldown, escalation
+        +--> SessionLogger ........ frame CSV + SQLite events
+        +--> send_to_pico() ....... serial state string on every change
+        +--> TelemetryHub ......... annotated JPEG + UI payload
+                  |
+                  v
+             WebUI (stdlib HTTP) --> browser Command Deck
+
+Everything downstream of Signals is driven by explicit timestamps, never frame
+counts, so the pipeline behaves identically on a live camera and on a video
+file decoded faster than real time. That property is what makes offline
+feature extraction produce training features identical to inference features.
+
+
+================================================================================
+5. REPOSITORY LAYOUT
+================================================================================
+
+  run.py                        live runner: CLI, loop, alerts, logging, UI
+  config.yaml                   every tunable threshold
+  requirements.txt              pinned dependencies
+  README.md                     project README (install, tuning, datasets)
+  test_cnn_live.py              standalone CNN test window
+  pytest.ini                    restricts test discovery to tests/
+  calibration.json              cached per-driver baseline (generated)
+  VIGILEYE_PROJECT_DETAILS.txt  this document
+
+  vigileye/
+    __init__.py
+    config.py                   YAML + defaults, dot-access Cfg dict
+    landmarks.py                MediaPipe wrapper, landmark indices, 3-D model
+    metrics.py                  EAR, MAR, PERCLOS, blinks, micro-sleeps, yawns
+    head_pose.py                solvePnP, Euler decomposition, nod/turn
+    gaze.py                     iris gaze ratios, eyes-off-road window
+    distraction.py              YOLOv8n phone + MediaPipe hands-on-wheel
+    fusion.py                   Signals, scoring, hysteresis, hybrid fusion
+    temporal_model.py           LSTM/GRU + sliding-window inference
+    calibration.py              per-driver baseline capture
+    alerts.py                   escalation, cooldown, audio backends
+    logger.py                   frame CSV + SQLite event store
+    visualize.py                OpenCV HUD overlay
+    video.py                    threaded capture, drops stale frames
+    pipeline.py                 orchestrates the whole perception stack
+    cnn_inference.py            MobileNetV3 drowsiness classifier wrapper
+    pico_alert.py               Raspberry Pi Pico serial link (host side)
+    webui/
+      __init__.py               exports TelemetryHub, WebUI
+      hub.py                    thread-safe frame + telemetry store
+      server.py                 stdlib HTTP server, MJPEG, JSON API
+      index.html               the Command Deck page (Tailwind + vanilla JS)
+
+  dashboard/app.py              Streamlit fleet analytics
+  training/train_drowsiness.py  MobileNetV3 training script
+  scripts/collect_features.py   videos -> features.csv
+  scripts/train_fusion.py       subject-wise LSTM training
+  scripts/evaluate.py           model / rules / speed benchmarks
+  tests/test_metrics.py         unit tests
+
+  models/
+    face_landmarker.task        MediaPipe Tasks face bundle (3.7 MB, present)
+    hand_landmarker.task        MediaPipe Tasks hand bundle (auto-downloaded)
+    drowsiness_model.pth        MISSING - CNN not trained yet
+    vigileye_lstm.pt            MISSING - temporal model not trained yet
+
+  data/raw/Driver Drowsiness Dataset (DDD)/
+    Drowsy/                     22,348 images
+    Non Drowsy/                 19,445 images
+
+  logs/
+    vigileye.db                 SQLite event store
+    session_<id>.csv            per-frame feature log
+
+
+================================================================================
+6. MODULE-BY-MODULE REFERENCE
+================================================================================
+
+config.py
+  DEFAULTS mirrors config.yaml so the package runs even with no YAML file. A
+  user file is deep-merged over the defaults, so a partial config overriding
+  two thresholds is valid. Cfg is a dict subclass with attribute access, so
+  cfg.eye.ear_threshold works. load_calibration / save_calibration read and
+  write calibration.json.
+
+landmarks.py
+  Wraps BOTH MediaPipe APIs and auto-detects which is installed:
+    - "solutions": the legacy mp.solutions.face_mesh API
+    - "tasks":     the modern FaceLandmarker, needs a downloaded .task bundle
+  MediaPipe removed mp.solutions in the 0.10.2x series, which breaks nearly all
+  published drowsiness code; supporting both means every threshold and index
+  constant works unchanged either way. Both produce the same 478-point
+  topology. Key index constants:
+
+    LEFT_EYE_EAR      = (33, 160, 158, 133, 153, 144)
+    RIGHT_EYE_EAR     = (362, 385, 387, 263, 373, 380)
+    LEFT_EYE_CORNERS  = (33, 133)     outer, inner
+    LEFT_EYE_LIDS     = (159, 145)    top, bottom
+    RIGHT_EYE_CORNERS = (362, 263)
+    RIGHT_EYE_LIDS    = (386, 374)
+    LEFT_IRIS_CENTER  = 468           requires refine_landmarks: true
+    RIGHT_IRIS_CENTER = 473
+    MOUTH_VERTICAL    = ((81,178), (13,14), (311,402))
+    MOUTH_CORNERS     = (78, 308)
+    POSE_LANDMARKS    = nose_tip, chin, left/right_eye_outer, left/right_mouth
+    MODEL_POINTS_3D   = generic 3-D face model for solvePnP
+
+  ensure_model() downloads Tasks bundles into models/ on first use.
+
+metrics.py
+  eye_aspect_ratio: EAR = (|p2-p6| + |p3-p5|) / (2 * |p1-p4|). Scale-invariant
+    because the denominator is eye width, so leaning toward or away from the
+    camera does not change it.
+  mouth_aspect_ratio: three vertical lip pairs averaged, normalised by mouth
+    width.
+  PerclosTracker: P80 PERCLOS, the fraction of a rolling 60 s window with eyes
+    closed. Samples are time-stamped, not frame-counted, so a dropped frame or
+    variable frame rate does not bias it. Exposes coverage_s for warm-up
+    gating.
+  BlinkDetector: closure between blink_min_s (0.06) and blink_max_s (0.50) is
+    a blink; anything past microsleep_s (0.80) escalates to a micro-sleep. The
+    micro-sleep fires WHILE the eyes are still shut, not after they reopen -
+    waiting would defeat the warning. Also reports blink_rate_per_min.
+  YawnDetector: a yawn is a sustained opening, not one high-MAR frame.
+    Requiring yawn_min_s (1.2 s) of continuous opening removes false positives
+    from speech, laughing and singing.
+  RollingRatio: fraction of a window in which a boolean held.
+  SustainedFlag: true once a condition has held continuously for a duration.
+  clip01: clamp to [0, 1].
+
+head_pose.py
+  cv2.solvePnP maps the generic 3-D face model onto six detected 2-D landmarks,
+  then the rotation matrix is decomposed into yaw/pitch/roll degrees. Pitch is
+  wrapped so a forward-facing head sits near 0 instead of +/-180. The camera
+  matrix is a pinhole approximation (focal length = image width, centre =
+  image centre): fine for detecting pose CHANGE, not absolute angles. The
+  previous solution is reused as an extrinsic guess for stability.
+  NodDetector: counts head-drop events where (pitch - baseline_pitch) is below
+    -pitch_nod_deg for at least nod_min_s, remembering them for nod_memory_s.
+  HeadTurnDetector: true while |yaw - baseline_yaw| exceeds yaw_threshold_deg
+    continuously for off_road_min_s.
+  Both are relative to the CALIBRATED baseline pose, because a driver's neutral
+  head position depends entirely on where the camera was mounted.
+
+gaze.py
+  No full 3-D gaze vector. Instead the iris centre position inside its own eye
+  opening, normalised to [0, 1] on both axes: h_ratio 0.5 means looking
+  straight ahead, 0.0 means fully to the image-left corner. Robust, needs no
+  per-user gaze calibration to be useful, and is exactly the signal an
+  eyes-off-road flag requires. Combined with head yaw in fusion, because a
+  driver can look away with their eyes or by turning their head. set_baseline()
+  shifts the neutral point to the calibrated straight-ahead.
+
+distraction.py
+  PhoneDetector: YOLOv8n restricted to COCO class 67 (cell phone). YOLO is the
+    most expensive component, so it runs on 1-in-every_n_frames and its output
+    is HELD between runs. A phone must also persist for phone_persist_s before
+    it counts, which suppresses the single-frame false positives that plague
+    small-object detection. If ultralytics is unavailable it prints a warning
+    and disables itself.
+  HandsOnWheelDetector: MediaPipe Hands plus a normalised steering-wheel ROI.
+    Counts hands whose landmark centroid falls inside the ROI, and raises
+    hands_off once zero hands have been inside for hands_off_min_s. COCO has no
+    "hand" class, so a YOLO version would need a custom dataset; landmarks give
+    a usable signal on day one. The ROI must be set per vehicle.
+
+video.py
+  For a webcam, frames are read in a background thread and the newest frame is
+  always handed out. If inference is slower than the camera, a queued reader
+  would accumulate latency until alerts referred to something seconds old; for
+  a safety system, dropping stale frames is strictly correct. For a video FILE
+  it reads synchronously so no frames are skipped and offline extraction is
+  deterministic, with timestamps derived from frame index / source fps.
+
+visualize.py
+  draw_landmarks, draw_pose_axis, draw_wheel_roi, draw_detections and draw_hud
+  paint the OpenCV overlay. In web-UI mode the pipeline draws the geometric
+  overlays into the streamed frame but skips the HUD panel, because the browser
+  renders its own metrics.
+
+pipeline.py
+  One class, one method: process(frame_bgr, ts) -> (Signals, FusionResult).
+  Both run.py and scripts/collect_features.py use this exact object, which
+  guarantees training features match inference features byte for byte.
+  Object cues run even when no face is found, because a driver looking
+  completely away may lose the face mesh while still holding a phone. During
+  calibration it returns a forced ALERT with source="calibrating".
+
+
+================================================================================
+7. THE SIGNALS RECORD
+================================================================================
+
+One Signals dataclass is produced per frame (vigileye/fusion.py):
+
+  ts                    frame timestamp (seconds)
+  face_found            was a face detected
+  ear                   eye aspect ratio, mean of both eyes
+  mar                   mouth aspect ratio
+  ear_threshold         active (calibrated) closed-eye threshold
+  mar_threshold         active (calibrated) yawn threshold
+  perclos               rolling-window fraction of eye closure
+  perclos_coverage      seconds of data in the PERCLOS window
+  eye_closed            instantaneous closure
+  closed_duration       length of the current ongoing closure
+  blink_rate            blinks per minute
+  microsleep_recent     a micro-sleep occurred in the last 10 s
+  microsleep_count      cumulative count this session
+  yawn_rate             yawns per minute
+  is_yawning            currently mid-yawn
+  yawn_count            cumulative count
+  yaw, pitch, roll      head pose in degrees
+  nod_active            currently in a head drop
+  nod_recent_count      nods inside nod_memory_s
+  head_turned           sustained head turn away from centre
+  gaze_h, gaze_v        normalised iris position (0.5 = centred)
+  gaze_off              instantaneously looking off-road
+  gaze_off_ratio        fraction of the recent window off-road
+  phone_conf            best phone detection confidence
+  phone_sustained       phone held long enough to count
+  cnn_drowsy_prob       MobileNetV3 drowsy probability
+  cnn_available         whether the CNN actually contributed (added so a
+                        missing checkpoint cannot silently scale the score)
+  hands_detected        hands visible
+  hands_on_wheel        hands inside the wheel ROI
+  hands_off             sustained hands-off-wheel
+
+to_vector() emits the normalised 22-feature vector for the temporal model. The
+FEATURE_NAMES ordering in fusion.py is the contract between the live pipeline,
+the offline feature dumper and the LSTM - do not reorder it casually. Note the
+CNN probability is deliberately NOT part of that vector.
+
+
+================================================================================
+8. FUSION: SCORING, HYSTERESIS AND STATES
+================================================================================
+
+Every cue is normalised to [0, 1] against a physically meaningful saturation
+point, so the weights are comparable and interpretable:
+
+  perclos     = coverage_gate * (perclos / perclos_critical)
+  microsleep  = 1.0 if a micro-sleep occurred recently else 0.0
+  yawn        = yawn_rate / 3.0
+  nod         = nod_recent_count / 3.0
+  phone       = phone_conf if sustained else 0.35 * phone_conf
+  gaze        = gaze_off_ratio / 0.4
+  head        = 1.0 if head_turned else 0.0
+  hands       = 1.0 if hands_off else 0.0
+  cnn         = CNN drowsy probability
+
+Weighted sums (weights from config.yaml):
+
+  drowsy_score   = 0.40*perclos + 0.20*microsleep + 0.20*yawn + 0.20*nod
+  distract_score = 0.35*phone + 0.25*gaze + 0.25*head + 0.15*hands
+
+Two important corrections applied on top:
+
+  - PERCLOS warm-up gate. PERCLOS is a rolling-minute statistic and is
+    meaningless until the window fills: one closed frame at t=0 would read as
+    100% closure. Its influence ramps in linearly over the first 15 seconds of
+    window coverage. Without this, a single frame of startup noise put the
+    drowsy score at 0.40 against a 0.45 threshold on every launch.
+
+  - CNN blend, only when the model is actually loaded:
+        if cnn_available: drowsy = 0.80*drowsy + 0.20*cnn
+    Previously this blend was unconditional, so with no trained checkpoint
+    every drowsiness score was silently multiplied by 0.8, making real
+    drowsiness harder to reach the threshold. It is now gated on the
+    cnn_available flag.
+
+  - Emergency override: closed_duration >= 1.0 s forces drowsy >= 0.95,
+    regardless of the still-warming window averages.
+
+State machine (RuleFusion):
+  A raw state is chosen by comparing scores to drowsy_threshold /
+  distract_threshold (both 0.45), with NO_DRIVER when no face is present.
+  Switching requires confirm_frames (8) of agreement; returning to ALERT
+  requires release_frames (20); and every state is held at least min_state_s
+  (1.5 s). This turns a jittery per-frame classification into something a
+  human can tolerate. There is an explicit regression test asserting that a
+  single bad frame cannot flip the output.
+
+HybridFusion blends the rule score with the LSTM class probabilities using
+temporal.blend (default 0.5). The rule engine still owns the hysteresis and
+still works from frame one, so an under-trained model degrades the system
+gracefully rather than breaking it.
+
+FusionResult carries: state, drowsy_score, distract_score, confidence,
+contributions (the per-cue dict, which is what the UI radar chart plots),
+raw_state (pre-hysteresis) and source ("rule", "hybrid" or "calibrating").
+
+
+================================================================================
+9. CALIBRATION
+================================================================================
+
+Ten seconds of "look at the road normally" at session start. The Calibrator
+collects EAR, MAR, yaw, pitch, roll and gaze ratios, then derives:
+
+  ear_open      = median of EAR frames at or above the 25th percentile
+                  (the lowest 25% are blinks, not "eyes open")
+  ear_threshold = max(0.10, ear_open * calib_ratio)          calib_ratio 0.75
+  mar_closed    = median MAR
+  mar_threshold = max(0.35, mar_closed * calib_multiplier)   multiplier 2.2
+  yaw/pitch/roll/gaze_h/gaze_v = medians (the neutral pose and straight-ahead)
+
+Medians are used throughout so a couple of blinks during the window cannot drag
+the baseline down. Fewer than 5 samples falls back to the fixed config
+thresholds. The result is saved to calibration.json and reused on the next run;
+--recalibrate deletes it, and pressing c (or the Calibrate button) re-runs it
+live.
+
+
+================================================================================
+10. ALERTS AND ESCALATION
+================================================================================
+
+AlertManager policy - the alerting policy matters as much as the detector:
+
+  Cooldown     the same (state, level) pair cannot fire more than once per
+               cooldown_s (5 s). Without this a drowsy driver gets a
+               continuous siren, which people respond to by unplugging the
+               device.
+  Escalation   if the unsafe state persists past escalate_s (8 s), the alert
+               moves from level 1 (soft chime, 880 Hz, 0.25 s) to level 2
+               (urgent burst: 1200 Hz, 1200 Hz, 1400 Hz).
+  Degradation  audio backends are tried in order (sounddevice, then
+               simpleaudio, then a console bell), so alerts are never silently
+               broken. Optional spoken alerts via pyttsx3 when alerts.tts is
+               true. Playback runs on a daemon thread so it never blocks the
+               perception loop.
+
+Messages:
+  (DROWSY, 1)      "Drowsiness detected - stay alert"
+  (DROWSY, 2)      "WAKE UP - pull over and rest"
+  (DISTRACTED, 1)  "Eyes on the road"
+  (DISTRACTED, 2)  "EYES ON THE ROAD NOW"
+  (NO_DRIVER, 1)   "Driver not detected - check camera"
+
+is_flashing(ts) drives the HUD flash for 1 s after an alert, and the browser
+hero-banner pulse.
+
+
+================================================================================
+11. CONFIGURATION REFERENCE (config.yaml)
+================================================================================
+
+Every threshold lives here; nothing is hard-coded in the detectors, so you
+retune for a new camera or vehicle without touching Python.
+
+camera:      source 0 (webcam index or video path), 640x480 @ 30, flip true
+face_mesh:   max_num_faces 1, refine_landmarks TRUE (required for iris/gaze),
+             min_detection_confidence 0.5, min_tracking_confidence 0.5
+eye:         ear_threshold 0.21 (fallback), use_calibration true,
+             calib_ratio 0.75, perclos_window_s 60, perclos_warn 0.15,
+             perclos_critical 0.30, blink_min_s 0.06, blink_max_s 0.50,
+             microsleep_s 0.80
+mouth:       mar_threshold 0.55, use_calibration true, calib_multiplier 2.2,
+             yawn_min_s 1.2, yawn_window_s 120
+head:        yaw_threshold_deg 25, pitch_nod_deg 15, nod_min_s 0.5,
+             off_road_min_s 2.0, nod_memory_s 20
+gaze:        h_range [0.36, 0.64], v_range [0.28, 0.75], window_s 10,
+             off_ratio_warn 0.40
+objects:     enabled true, model yolov8n.pt (auto-downloads), conf 0.35,
+             every_n_frames 5, phone_persist_s 1.0
+objects.hands: enabled true, max_num_hands 2, min_detection_confidence 0.5,
+             wheel_roi [0.20, 0.55, 0.90, 1.00] (x1,y1,x2,y2 normalised),
+             hands_off_min_s 2.0
+fusion:      mode rule, drowsy_threshold 0.45, distract_threshold 0.45,
+             confirm_frames 8, release_frames 20, min_state_s 1.5, weights
+temporal:    checkpoint models/vigileye_lstm.pt, window 30, blend 0.5
+alerts:      enabled true, cooldown_s 5, escalate_s 8, volume 0.35, tts false
+logging:     dir logs, frame_log true, db logs/vigileye.db, flush_every 100
+calibration: duration_s 10, file calibration.json
+
+Tuning table (from the README):
+
+  Fires DROWSY while alert .......... lower eye.calib_ratio (0.75 -> 0.65)
+  Misses obvious eye closure ........ raise eye.calib_ratio (0.75 -> 0.82)
+  Talking counts as yawning ......... raise mouth.yawn_min_s (1.2 -> 1.8)
+  Distraction too twitchy ........... raise head.off_road_min_s (2.0 -> 3.0)
+  Alerts too naggy .................. raise alerts.cooldown_s, min_state_s
+  State flickers .................... raise fusion.confirm_frames
+  Too slow ........................... raise objects.every_n_frames, or
+                                       run with --no-objects
+
+
+================================================================================
+12. THE WEB UI "COMMAND DECK"
+================================================================================
+
+Purpose: running python run.py opens a browser dashboard alongside the camera,
+with every metric, chart and control the desktop window had, and more.
+
+Deliberately built on the Python standard library (http.server) rather than
+Flask or FastAPI, because the UI must come up automatically on an edge device
+without adding a web framework to the install.
+
+Files:
+  vigileye/webui/hub.py       TelemetryHub - shared state
+  vigileye/webui/server.py    WebUI - HTTP server and routes
+  vigileye/webui/index.html   the page (Tailwind CDN + vanilla JS, no build)
+
+TelemetryHub
+  The pipeline thread pushes frames and signals in; HTTP handler threads read
+  snapshots out. All display formatting happens here in Python, so the page
+  stays a thin renderer. publish() builds a flat payload of element id ->
+  value in four buckets:
+      text   id -> string            (textContent)
+      width  id -> "42%"             (progress bar widths)
+      attr   id -> {attribute: val}  (SVG path d, polygon points, dashoffset)
+      html   id -> markup            (alert rows, incident rows)
+  It also keeps 150-sample history deques for ear, perclos, blink, mar, yaw,
+  pitch, drowsy and distract, and renders them into SVG path strings
+  server-side (_spark / _trace), which keeps the client-side JavaScript to a
+  single generic updater. publish_frame() JPEG-encodes the annotated frame at
+  quality 72 and notifies waiting MJPEG streams through a Condition, so each
+  frame is delivered once with no busy-waiting.
+
+Routes
+  GET  /                 the dashboard page
+  GET  /video            annotated frames as multipart/x-mixed-replace MJPEG
+  GET  /api/telemetry    the id -> value payload, polled every 400 ms
+  GET  /api/fleet        historical sessions aggregated from SQLite (read-only)
+  GET  /healthz          liveness probe
+  POST /api/command      {"action": "recalibrate"|"mute"|"unmute"|"snapshot"|"stop"}
+
+  Commands are queued on the hub and drained by the run loop, so all state
+  mutation happens on the pipeline thread rather than in a request handler.
+  Per-request logging is suppressed, since it would drown the console the
+  pipeline is printing to. The port auto-advances up to 9 slots if 8000 is
+  taken by a previous run still closing.
+
+Views (sidebar, or keys 1-5)
+  1 Live cockpit    KPI strip, hero state banner with drowsiness/distraction/
+                    eyes-off-road gauges, live video with EAR/MAR/mesh/pose
+                    overlay chips, risk gauge, six biometric cards with
+                    sparklines, radar of fusion contributions, dual score
+                    trace, and the live alert feed with filters and search.
+  2 Fatigue trends  PERCLOS, blink rate, yawn rate, micro-sleeps and both
+                    scores as larger history charts.
+  3 Camera & gaze   enlarged annotated feed plus gaze h/v, off-road fraction,
+                    phone confidence, hands on wheel, CNN probability and
+                    current closure duration.
+  4 Incident log    every alert this session in a searchable table.
+  5 Fleet board     all recorded sessions from logs/vigileye.db with alert and
+                    critical counts and peak drowsy score.
+
+Controls in the header
+  Calibrate = the c key, Mute/Unmute = m, Snapshot = s, Stop = q. Stop shuts
+  the session down cleanly (camera released, logs closed, server stopped).
+
+Implementation notes
+  - A single <img> element carries the MJPEG stream and is physically moved
+    between the cockpit and camera views, because duplicating the element
+    would open a second video connection.
+  - The hero banner pulses while the state is DROWSY or DISTRACTED.
+  - A calibration ribbon with a progress bar appears only while calibrating.
+  - The page pulls Tailwind and fonts from a CDN, so styling needs internet.
+    All data and video are local and work offline; only the layout degrades.
+
+
+================================================================================
+13. LOGGING, CSV SCHEMA AND SQLITE SCHEMA
+================================================================================
+
+Two sinks, deliberately separate:
+
+Per-frame CSV (logs/session_<id>.csv) - raw material for training the v2 model
+and for offline threshold tuning. Columns:
+
+  ts, face_found, ear, mar, ear_threshold, perclos, eye_closed,
+  closed_duration, blink_rate, microsleep_recent, microsleep_count,
+  yawn_rate, is_yawning, yawn_count, yaw, pitch, roll, nod_active,
+  nod_recent_count, head_turned, gaze_h, gaze_v, gaze_off, gaze_off_ratio,
+  phone_conf, phone_sustained, hands_detected, hands_on_wheel, hands_off,
+  state, drowsy_score, distract_score, cnn_drowsy_prob
+
+Set logging.frame_log: false in production. Per-frame CSV is for training data
+collection, not for shipping.
+
+SQLite event store (logs/vigileye.db) - only state transitions and alerts, so
+the dashboard stays fast after months of driving.
+
+  sessions(session_id PK, driver_id, vehicle_id, started_at, ended_at,
+           device, frames, mean_fps)
+  events(id PK, session_id FK, ts, wall_time, kind, state, level,
+         drowsy_score, distract_score, perclos, message)
+    kind is 'state_change' or 'alert'
+    indexes on session_id and kind
+
+Session ids are 12 hex characters. close() writes ended_at, frame count and
+mean FPS.
+
+
+================================================================================
+14. CNN DROWSINESS CLASSIFIER (MobileNetV3)
+================================================================================
+
+Role
+  A learned visual cue that supplements the interpretable geometric ones. It
+  contributes 20% of the drowsiness score when available (section 8).
+
+Model (vigileye/cnn_inference.py)
+  MobileNetV3-Small, final classifier layer replaced with a 2-class Linear
+  head. Input is the face crop taken from the MediaPipe landmark bounding box
+  expanded by 30 px, converted BGR -> RGB -> PIL, resized to 224x224,
+  normalised with ImageNet statistics. Returns (label, confidence,
+  drowsy_probability). The drowsy class index is looked up from the checkpoint
+  class_to_idx, so class ordering does not matter, and a trailing-space
+  variant "Drowsy " is tolerated.
+
+Checkpoint format
+  {"model_state_dict": ..., "class_to_idx": ..., "image_size": 224}
+  Expected at models/drowsiness_model.pth. THIS FILE DOES NOT EXIST YET.
+
+Current behaviour without the checkpoint
+  pipeline.py wraps construction in try/except, prints
+    [VigilEye] CNN drowsiness model disabled: ... No such file or directory
+  and sets self.cnn = None. Prediction is skipped, cnn_available stays False,
+  and the CNN blend is bypassed. Before this fix, python run.py crashed on
+  startup with FileNotFoundError before the camera ever opened.
+
+Training (training/train_drowsiness.py)
+  Dataset:  data/raw/Driver Drowsiness Dataset (DDD)
+              Drowsy/      22,348 images
+              Non Drowsy/  19,445 images
+              41,793 total
+  Split:    70 / 15 / 15 train / val / test, seed 42, via random_split on an
+            ImageFolder. NOTE: this is a FRAME-level split, not subject-wise,
+            so the reported test accuracy will be optimistic - the same face
+            can appear in both train and test. The LSTM training script
+            (section 15) does this correctly; this one does not.
+  Augment:  random horizontal flip, +/-5 degree rotation, brightness and
+            contrast jitter 0.15, then ImageNet normalisation.
+  Model:    MobileNetV3-Small with pretrained weights, new 2-class head.
+  Optimiser: AdamW, lr 1e-4, batch 16, 5 epochs, CrossEntropyLoss.
+  Saves the best-validation-accuracy checkpoint, then reports test metrics.
+
+  To train:  python training/train_drowsiness.py
+  Expect roughly 1 to 2 hours on this machine, since CUDA is unavailable and
+  MobileNetV3-Small at 224x224 over ~35,500 training images per epoch runs on
+  CPU. Reducing EPOCHS or IMAGE_SIZE is the fastest way to shorten that.
+
+  After training, models/drowsiness_model.pth appears and the pipeline picks it
+  up automatically on the next run - no code change needed.
+
+test_cnn_live.py runs the classifier alone against the webcam, which is useful
+for sanity-checking a fresh checkpoint before wiring it into fusion.
+
+
+================================================================================
+15. TEMPORAL LSTM FUSION MODEL (v2)
+================================================================================
+
+Purpose
+  Learn the temporal signature of fatigue from the same features the rules use,
+  rather than replacing them.
+
+Model (vigileye/temporal_model.py)
+  Input  (batch, window, n_features), window 30 frames (~1 s at 30 fps)
+  LSTM or GRU, hidden 64, 1 layer, LayerNorm, dropout 0.3, then a
+  Linear(64,32) -> ReLU -> Linear(32,3) head.
+  Temporal pooling is attention-free: 0.5 * mean over the window + 0.5 * final
+  state. Mean gives stability, last state gives recency.
+  Output 3 logits over [ALERT, DROWSY, DISTRACTED].
+  Deliberately tiny (~40k parameters): it must run at 30 fps on a Jetson Nano
+  alongside MediaPipe and YOLO, and it is trained on at most a few hundred
+  subjects, so a larger network would simply memorise them.
+
+  TemporalFusion is the sliding-window inference wrapper. If the checkpoint is
+  missing it prints a notice, sets available = False and the pipeline stays on
+  rules. Feature vectors are standardised with the mean and std stored in the
+  checkpoint.
+
+Pipeline
+  Step 1  python scripts/collect_features.py --videos data/videos
+              --out data/features.csv --stride 2 --no-objects
+          Runs the exact same VigilEyePipeline the live system uses, which is
+          what guarantees training features match inference features.
+          Videos must be organised so the parent directory is the label:
+              data/videos/alert/ , drowsy/ , distracted/
+  Step 2  python scripts/train_fusion.py --features data/features.csv --epochs 40
+          Options: --window 30 --stride 5 --hidden 64 --layers 1
+                   --cell lstm|gru --batch-size 128 --lr 1e-3 --dropout 0.3
+                   --val-frac 0.25 (fraction of SUBJECTS held out) --seed 42
+          The script enforces three things most published results get wrong:
+            - Subject-wise splitting. Whole people are held out, never frames.
+              Frame-level shuffling leaks the same face into train and test and
+              inflates accuracy by 15-25 points.
+            - Windows never cross video boundaries; a window spanning two clips
+              is a fabricated sample.
+            - Class weighting plus macro-F1 model selection. Real datasets are
+              heavily skewed toward ALERT, and unweighted training yields a
+              model that always predicts ALERT and reports 78% accuracy.
+  Step 3  python run.py --mode hybrid
+
+Expected score: 75-88% macro-F1 on NTHU-DDD with honest subject-wise splits.
+97%+ means a leak; check that no subject appears in both splits.
+
+Evaluation (scripts/evaluate.py)
+  model  LSTM quality on held-out features
+  rules  rule-engine accuracy against labelled videos, no training needed
+  speed  per-stage latency and sustained FPS, reported with and without YOLO
+         separately. Report p95 latency, not mean: a system averaging 30 FPS
+         that stalls 400 ms during a micro-sleep is not a safety system.
+
+
+================================================================================
+16. STREAMLIT FLEET DASHBOARD
+================================================================================
+
+    streamlit run dashboard/app.py
+
+Reads logs/vigileye.db (cached 15 s) and shows: session and frame totals,
+drowsy / distraction / critical alert counts, alerts by type, alerts by hour of
+day with the peak risk hour called out, risk scores over time, a driver risk
+ranking normalised per hour driven, the session table and a raw alert log.
+
+This is the fleet-operator view. It is historical and cross-session, whereas
+the Command Deck (section 12) is the live single-driver view. They read the
+same database.
+
+
+================================================================================
+17. RASPBERRY PI PICO IMPLEMENTATION
+================================================================================
+
+17.1 ROLE IN THE SYSTEM
+-----------------------
+The Pico is an OPTIONAL external annunciator. VigilEye already alerts through
+the laptop speakers and the screen; the Pico exists so the warning can leave
+the computer and drive real hardware in the vehicle - LEDs on the dash, a
+piezo buzzer, a relay, a seat vibration motor - independently of whether
+anyone is looking at the laptop. It is an accessory, never a dependency: if
+pyserial is missing or no board is attached, VigilEye keeps running and simply
+reports the link as offline.
+
+17.2 HOST SIDE (implemented: vigileye/pico_alert.py)
+----------------------------------------------------
+Public API:
+
+  get_pico()        Lazily opens the serial port on first use and caches the
+                    handle. Returns None when unavailable.
+  send_to_pico(s)   Writes one state name plus "\n". Returns True if it landed.
+                    On a write error it closes and drops the handle so the next
+                    state change transparently retries the connection.
+  pico_status()     Human-readable link status, shown in the UI footer:
+                    "pyserial missing" | "COM7 not opened" | "COM7 linked" |
+                    "COM7 offline" | "COM7 write error"
+  close_pico()      Closes the port; called from run.py's finally block.
+
+Configuration:
+
+  Port  environment variable VIGILEYE_PICO_PORT, default "COM7"
+          Windows:  set VIGILEYE_PICO_PORT=COM5
+          Linux:    export VIGILEYE_PICO_PORT=/dev/ttyACM0
+          macOS:    export VIGILEYE_PICO_PORT=/dev/tty.usbmodem0001
+  Baud  115200, 8N1, 1 s timeout. Over USB CDC the baud rate is nominal and
+        ignored by the hardware, but it must still be supplied.
+
+Failure handling:
+  - "import serial" is wrapped in try/except, so a missing pyserial cannot
+    crash the program at import time.
+  - Connection and import failures are announced ONCE via _warn_once(), then
+    stay silent. Previously the failure printed on every single state change,
+    which flooded the console (and would flood the UI log panel).
+
+Where it is called from (run.py, inside the main loop):
+
+    if not pipeline.calibrating:
+        current_state = result.state.value
+        if current_state != previous_state:
+            send_to_pico(current_state)
+            previous_state = current_state
+
+So: nothing is sent during calibration, and one line is sent per STATE
+TRANSITION, not per frame. That keeps the serial link almost completely idle.
+
+17.3 WIRE PROTOCOL
+------------------
+Direction:  host -> device only. The device sends nothing back.
+Framing:    one ASCII line per message, terminated by "\n" (0x0A).
+Payload:    exactly one of the four DriverState names, uppercase:
+
+    ALERT        driver is fine
+    DROWSY       fatigue detected - the serious one
+    DISTRACTED   attention off the road
+    NO_DRIVER    no face in frame (camera blocked, or driver absent)
+
+Timing:     emitted only when the state changes. Because of the fusion
+            hysteresis (8 confirming frames, 1.5 s minimum dwell) transitions
+            are inherently rate-limited; the board will never be flooded.
+Example session on the wire:
+
+    ALERT\n
+    DISTRACTED\n
+    ALERT\n
+    DROWSY\n
+    ALERT\n
+
+Deliberate protocol limitations, worth knowing before you build on it:
+  - The ALERT LEVEL IS NOT SENT. AlertManager distinguishes level 1 (soft
+    warning) from level 2 (escalated, unresolved for 8+ s), but the Pico only
+    receives the bare state name, so the hardware cannot tell a first warning
+    from an escalation. If you need that, extend the protocol to
+    "DROWSY:2\n" and split on ":" in the firmware - the host change is one
+    line in run.py.
+  - There is NO INITIAL STATE. The first line is only sent on the first
+    transition, so the board must default to something sane at boot (the
+    reference firmware defaults to ALERT).
+  - There is NO HEARTBEAT and no acknowledgement, so neither side can detect
+    that the other has gone away. Do not add a receive timeout to the firmware
+    unless you also make the host send periodic keep-alives; silence is normal.
+  - The port is not read by the host, so anything the board prints back
+    accumulates in the OS buffer and is ignored.
+
+17.4 HARDWARE
+-------------
+Bill of materials:
+  1 x Raspberry Pi Pico or Pico W (or Pico 2)
+  1 x micro-USB cable (data, not charge-only)
+  1 x green LED, 1 x amber/yellow LED, 1 x red LED
+  3 x 330 ohm resistors (one per LED)
+  1 x passive piezo buzzer (PWM-driven, so tone can vary by state)
+      or an active buzzer, in which case drive it through an NPN transistor
+      (e.g. 2N2222 with a 1k base resistor) because many active buzzers draw
+      more than the ~12 mA a Pico GPIO should source
+  1 x breadboard and jumper wires
+
+Wiring (matches the reference firmware below):
+
+  Pico pin   GPIO   Connects to
+  ---------  -----  ------------------------------------------------------
+  pin 20     GP15   green LED anode  -> 330R -> GND        (state ALERT)
+  pin 19     GP14   amber LED anode  -> 330R -> GND        (DISTRACTED /
+                                                            NO_DRIVER)
+  pin 17     GP13   red LED anode    -> 330R -> GND        (state DROWSY)
+  pin 16     GP12   buzzer +  (buzzer - to GND)            (PWM tone)
+  pin 18/23  GND    common ground rail
+  onboard    LED    heartbeat, proves the firmware loop is alive
+
+LED cathodes (short leg) go to the ground rail through the resistors.
+
+17.5 DEVICE FIRMWARE (MicroPython) - NOT YET IN THE REPOSITORY
+--------------------------------------------------------------
+Save the following as main.py on the Pico so it runs automatically at boot.
+
+--------------------------------- main.py --------------------------------------
+"""VigilEye Pico annunciator.
+
+Reads driver-state lines from the host over USB serial and drives three LEDs
+and a piezo buzzer. One line per state change, terminated by newline:
+ALERT | DROWSY | DISTRACTED | NO_DRIVER
+
+The host sends nothing during calibration and nothing between transitions, so
+silence is normal and must never be treated as a fault.
+"""
+import select
+import sys
+import time
+
+from machine import PWM, Pin
+
+GREEN = Pin(15, Pin.OUT)
+AMBER = Pin(14, Pin.OUT)
+RED = Pin(13, Pin.OUT)
+BUZZER = PWM(Pin(12))
+BUZZER.duty_u16(0)
+
+# Pin("LED") is the onboard LED on Pico W and recent firmware; on an original
+# Pico use Pin(25, Pin.OUT) instead.
+try:
+    HEARTBEAT = Pin("LED", Pin.OUT)
+except (TypeError, ValueError):
+    HEARTBEAT = Pin(25, Pin.OUT)
+
+# blink_ms 0 means a steady LED; tone 0 means the buzzer stays silent.
+PATTERNS = {
+    "ALERT":      {"led": GREEN, "blink_ms": 0,   "tone": 0,    "beep_ms": 0,   "gap_ms": 0},
+    "DROWSY":     {"led": RED,   "blink_ms": 150, "tone": 1200, "beep_ms": 180, "gap_ms": 120},
+    "DISTRACTED": {"led": AMBER, "blink_ms": 350, "tone": 880,  "beep_ms": 120, "gap_ms": 600},
+    "NO_DRIVER":  {"led": AMBER, "blink_ms": 900, "tone": 0,    "beep_ms": 0,   "gap_ms": 0},
+}
+
+poller = select.poll()
+poller.register(sys.stdin, select.POLLIN)
+
+
+def all_off():
+    GREEN.value(0)
+    AMBER.value(0)
+    RED.value(0)
+    BUZZER.duty_u16(0)
+
+
+def read_state(current):
+    """Drain every waiting line; the newest recognised state wins."""
+    new = current
+    while poller.poll(0):
+        line = sys.stdin.readline()
+        if not line:
+            break
+        name = line.strip().upper()
+        # Tolerates a future "DROWSY:2" form by keeping only the state name.
+        name = name.split(":")[0]
+        if name in PATTERNS:
+            new = name
+    return new
+
+
+state = "ALERT"          # safe default: nothing is sent until the first change
+last = None
+led_on = False
+buzz_on = False
+t_led = t_buzz = time.ticks_ms()
+
+all_off()
+
+while True:
+    state = read_state(state)
+    now = time.ticks_ms()
+
+    if state != last:
+        all_off()
+        last = state
+        led_on = False
+        buzz_on = False
+        t_led = t_buzz = now
+
+    p = PATTERNS[state]
+
+    # --- LED ---------------------------------------------------------------
+    if p["blink_ms"] == 0:
+        p["led"].value(1)
+    elif time.ticks_diff(now, t_led) >= p["blink_ms"]:
+        led_on = not led_on
+        p["led"].value(1 if led_on else 0)
+        t_led = now
+
+    # --- buzzer ------------------------------------------------------------
+    if p["tone"] == 0:
+        BUZZER.duty_u16(0)
+    else:
+        interval = p["beep_ms"] if buzz_on else p["gap_ms"]
+        if time.ticks_diff(now, t_buzz) >= interval:
+            buzz_on = not buzz_on
+            t_buzz = now
+            if buzz_on:
+                BUZZER.freq(p["tone"])
+                BUZZER.duty_u16(20000)     # ~30% duty, loud enough, not harsh
+            else:
+                BUZZER.duty_u16(0)
+
+    # --- heartbeat ---------------------------------------------------------
+    HEARTBEAT.value(1 if (now // 500) % 2 else 0)
+
+    time.sleep_ms(10)
+-------------------------------- end main.py -----------------------------------
+
+Behaviour summary:
+  ALERT        steady green, silent
+  DROWSY       fast red blink (150 ms) + urgent 1200 Hz beeping
+  DISTRACTED   amber blink (350 ms) + occasional 880 Hz chirp
+  NO_DRIVER    slow amber blink (900 ms), silent - a blocked camera is a fault
+               to notice, not an emergency to shout about
+  Onboard LED  1 Hz heartbeat, so you can tell the firmware is alive even when
+               the host has sent nothing
+
+The loop is fully non-blocking: select.poll(0) never waits, and all timing uses
+ticks_ms/ticks_diff, so the LED and buzzer patterns stay smooth regardless of
+when serial data arrives.
+
+17.6 SETUP PROCEDURE
+--------------------
+1. Install MicroPython on the board.
+   Hold BOOTSEL, plug in the USB cable, and the Pico mounts as a drive called
+   RPI-RP2. Download the .uf2 for your board from
+   https://micropython.org/download/ and copy it onto that drive. The board
+   reboots and disappears as a drive.
+
+2. Copy the firmware.
+   Use Thonny (select the MicroPython (Raspberry Pi Pico) interpreter) and save
+   the file above to the device as main.py, or use rshell / mpremote:
+       pip install mpremote
+       mpremote connect COM7 fs cp main.py :main.py
+   Saving it as main.py is what makes it run automatically on power-up.
+
+3. Find the port name.
+   Windows: Device Manager -> Ports (COM & LPT) -> "USB Serial Device (COMx)",
+   or:
+       python -c "import serial.tools.list_ports as p; print([(x.device, x.description) for x in p.comports()])"
+   Linux/macOS: ls /dev/ttyACM* or ls /dev/tty.usbmodem*
+
+4. Point VigilEye at it.
+   Windows PowerShell:   $env:VIGILEYE_PICO_PORT = "COM5"
+   Windows cmd:          set VIGILEYE_PICO_PORT=COM5
+   Linux/macOS:          export VIGILEYE_PICO_PORT=/dev/ttyACM0
+   Then run python run.py. On success the console prints
+       [VigilEye] Pico linked on COM5
+   and the UI footer shows "COM5 linked".
+
+5. IMPORTANT: close Thonny (or any serial monitor) before running VigilEye.
+   A USB CDC port can only be held by one process at a time. Leaving Thonny
+   connected is the most common cause of a port-busy failure.
+
+17.7 TESTING WITHOUT THE BOARD
+------------------------------
+The host side can be exercised with no hardware:
+
+  - Confirm the graceful path: with nothing attached, python run.py prints
+    "Pico offline: could not open COM7 (...)" exactly once and continues
+    normally. This is the currently verified behaviour on this machine.
+  - Drive it manually from a Python shell:
+        from vigileye.pico_alert import send_to_pico, pico_status
+        send_to_pico("DROWSY"); print(pico_status())
+  - For a real loopback test, create a virtual serial pair with com0com on
+    Windows (or socat on Linux: socat -d -d pty,raw,echo=0 pty,raw,echo=0),
+    point VIGILEYE_PICO_PORT at one end, and read the other end with a script
+    to watch the state strings arrive.
+  - With the board attached but the firmware not yet installed, a plain
+    MicroPython REPL will still accept the bytes harmlessly.
+
+17.8 TROUBLESHOOTING THE LINK
+-----------------------------
+  "could not open port 'COM7'" / semaphore timeout expired
+      Nothing is on that port, or the name is wrong, or another program (often
+      Thonny) holds it. Enumerate the ports as in step 3 above.
+  "pyserial missing"
+      pip install pyserial. Note it is currently NOT listed in
+      requirements.txt - add it.
+  Port opens but nothing happens on the board
+      The firmware is not running. Confirm the file is saved as main.py on the
+      device (not just executed once in the REPL) and that the heartbeat LED
+      is blinking.
+  LEDs light but the buzzer is silent
+      A passive piezo needs PWM (as used here); an active buzzer wants a plain
+      high level and usually a transistor. Check which one you have.
+  Board resets or LEDs dim
+      Too much current drawn from a GPIO. Add the 330R resistors, and put the
+      buzzer behind a transistor.
+  State never changes on the board
+      Remember nothing is sent during the 10 s calibration, and nothing is sent
+      unless the fused state actually transitions. Trigger a real DROWSY by
+      closing your eyes for ~2 s.
+
+17.9 SUGGESTED IMPROVEMENTS
+---------------------------
+In rough priority order:
+  1. Add pyserial to requirements.txt. The dependency is used but undeclared.
+  2. Send the alert level ("DROWSY:2") so hardware can escalate the way the
+     audio alerts already do.
+  3. Move the port into config.yaml alongside every other tunable, instead of
+     an environment variable with a hard-coded default, and add a --pico-port
+     CLI flag plus a --no-pico switch.
+  4. Make --no-alerts also suppress Pico writes; right now it only silences
+     audio.
+  5. Send the state once at startup (and after calibration) so the board is
+     never left showing a stale default.
+  6. Commit the firmware to the repository, e.g. firmware/pico/main.py, so the
+     protocol and its consumer are version-controlled together.
+  7. Consider a periodic keep-alive plus a firmware watchdog, so a crashed host
+     shows as a distinct "link lost" pattern rather than a frozen LED.
+
+
+================================================================================
+18. MEASURED PERFORMANCE
+================================================================================
+
+On this machine (Windows, Python 3.12.10, CPU only, no CUDA), full pipeline
+with YOLO every 5th frame and the CNN disabled:
+
+  Run 1:  220 frames in 45.4 s  =  4.8 FPS
+  Run 2:  384 frames in 96.4 s  =  4.0 FPS
+
+That is well below the 12-18 FPS the README targets for a Jetson-class device,
+because this is CPU-only inference with MediaPipe face mesh, MediaPipe hands
+and YOLOv8n all running on the same cores. The fastest levers, in order:
+
+  --no-objects                    drops YOLO and hands entirely
+  objects.every_n_frames: 10      YOLO dominates the budget and detections are
+                                  held between runs anyway
+  camera.width/height: 480x360    fewer pixels through every stage
+  --headless or the web UI        rendering the OpenCV HUD costs real frames
+  logging.frame_log: false        stop writing a CSV row per frame
+
+Design targets from the README for a Jetson Nano / Pi 4 class device:
+  face mesh + fusion only (--no-objects)   25-30 FPS
+  full pipeline, YOLO every 5th frame      12-18 FPS
+On Jetson, export YOLO to TensorRT: yolo export model=yolov8n.pt format=engine
+
+
+================================================================================
+19. DEPENDENCIES
+================================================================================
+
+From requirements.txt:
+  numpy>=1.24,<2.0        PIN IS LOAD-BEARING. MediaPipe 0.10.x breaks on
+                          numpy>=2.0 with a cryptic "_ARRAY_API not found"
+                          crash on import.
+  opencv-python>=4.8.0
+  mediapipe>=0.10.9,<0.10.22
+  ultralytics>=8.1.0      YOLOv8n phone detection
+  torch>=2.0.0            CPU wheel is fine and much smaller
+  pandas>=2.0.0, scikit-learn>=1.3.0, PyYAML>=6.0
+  streamlit>=1.30.0       fleet dashboard
+  pytest>=7.4.0
+  sounddevice>=0.4.6      optional audio; degrades to console alerts
+  (commented) simpleaudio, pyttsx3
+
+Installed in this environment but NOT declared in requirements.txt - add them:
+  torchvision 0.29.0      required by vigileye/cnn_inference.py and
+                          training/train_drowsiness.py
+  pyserial 3.5            required by vigileye/pico_alert.py
+  pillow                  required by cnn_inference.py (PIL.Image)
+  tqdm                    required by training/train_drowsiness.py
+
+The web UI adds no dependencies: it is built on http.server from the standard
+library. The page itself loads Tailwind and fonts from a CDN, so it needs
+internet for styling only.
+
+MediaPipe backend check:
+  python -m vigileye.landmarks              prints solutions | tasks | none
+  python -m vigileye.landmarks --download   pre-fetch the Tasks bundles
+Fetch bundles ahead of time - do not rely on venue wifi during a demo.
+
+
+================================================================================
+20. TEST SUITE
+================================================================================
+
+    pytest -q                 -> 20 passed
+
+tests/test_metrics.py covers the geometric ratios, the PERCLOS window, the
+blink and micro-sleep state machine, the yawn detector and the fusion
+hysteresis. All 20 tests pass.
+
+Note on discovery: test_cnn_live.py in the project root is a demo script, not a
+test, but it matches pytest's test_*.py discovery pattern and constructs the
+CNN at import time. With no trained checkpoint that raised FileNotFoundError
+during COLLECTION, so a bare "pytest -q" aborted with an error before running
+anything. A pytest.ini now restricts testpaths to tests/, so the documented
+command works again. Running "pytest tests -q" explicitly also works.
+
+Two real bugs the suite locked down, both easy to reintroduce:
+
+  Falsy-zero in micro-sleep timing. "self._closed_since or ts" treats a
+  timestamp of 0.0 as "not started", because 0.0 is falsy in Python. Live
+  webcam use hides this (epoch timestamps), but EVERY VIDEO FILE STARTS AT
+  t=0.0 - so offline feature extraction would silently never emit a
+  micro-sleep and the v2 model would train on broken labels. Now an explicit
+  "is not None" check, with a regression test.
+
+  PERCLOS cold start. One closed frame at startup made PERCLOS read 100%,
+  pushing the drowsy score to 0.40 against a 0.45 threshold - one frame of
+  noise away from a false alarm on every launch. Its influence now ramps in
+  over the first 15 seconds of window coverage.
+
+
+================================================================================
+21. KNOWN LIMITATIONS
+================================================================================
+
+State these before a judge finds them; owning a limitation reads as rigour.
+
+  - The Indian-conditions claim is design intent, not a measured result.
+    Nothing has been validated across skin tones or Indian lighting yet.
+  - The CNN is untrained, so the learned visual cue currently contributes
+    nothing. Detection is purely rule-based today.
+  - The temporal LSTM is untrained, so --mode hybrid and --mode temporal
+    silently behave like --mode rule.
+  - The CNN training script splits by frame, not by subject, so its reported
+    test accuracy will be optimistic.
+  - Hands-off-wheel uses MediaPipe Hands plus a configurable ROI, not YOLO,
+    because COCO has no "hand" class. The ROI must be set per vehicle.
+  - PERCLOS is inherently slow: it is a rolling-minute statistic, so gradual
+    fatigue takes 45-60 s to register. Acute events are caught immediately by
+    the micro-sleep and 1 s closure overrides. This is a deliberate trade-off.
+  - Sunglasses defeat EAR and gaze entirely; the system falls back to head pose
+    and yawning. An IR camera is the real fix.
+  - The camera pose model is a pinhole approximation (focal length = image
+    width). Fine for pose change, not absolute angles; use cv2.calibrateCamera
+    if you need those.
+  - The Pico link is one-way with no levels, no acknowledgement and no
+    firmware in the repository (section 17.3, 17.9).
+  - The web UI binds to 127.0.0.1 and has no authentication. Do not expose it
+    on a network interface as-is.
+  - Not a medical or legal device. It is a driver-assistance aid.
+
+
+================================================================================
+22. TROUBLESHOOTING
+================================================================================
+
+ModuleNotFoundError: No module named 'torchvision'
+    pip install torchvision. cnn_inference.py imports it at module level and
+    pipeline.py imports cnn_inference, so the whole program will not start
+    without it.
+
+FileNotFoundError: models/drowsiness_model.pth
+    Fixed. The pipeline now catches this and runs on rules. If you want the
+    CNN, train it (section 14).
+
+"_ARRAY_API not found" on import mediapipe
+    numpy 2.x is installed. pip install "numpy>=1.24,<2.0".
+
+AttributeError: module 'mediapipe' has no attribute 'solutions'
+    You have a 0.10.2x release. VigilEye handles this automatically via the
+    Tasks backend; run python -m vigileye.landmarks --download once.
+
+State flickers between ALERT and DROWSY
+    Calibration failed. Press c (or the Calibrate button) and hold still,
+    looking straight ahead. If it persists, lower eye.calib_ratio.
+
+Never detects eye closure
+    Check refine_landmarks is true, and that the face is well lit and fills a
+    reasonable part of the frame. Raise eye.calib_ratio toward 0.82.
+
+Cannot open video source / black frame
+    Another application holds the camera, or camera.source is the wrong index.
+    Try source 0 and 1. Note config.py's built-in default is 1 while
+    config.yaml sets 0.
+
+Port 8000 already in use
+    The server automatically tries 8000-8009; trust the URL printed in the
+    terminal. Or pass --ui-port.
+
+The dashboard page looks unstyled
+    No internet, so the Tailwind CDN did not load. The data and video still
+    work. Vendor Tailwind locally if you need offline styling.
+
+Browser shows "Sensor link lost"
+    The run.py process has exited. The page keeps polling and will recover if
+    you start it again on the same port.
+
+================================================================================
+END OF DOCUMENT
+================================================================================

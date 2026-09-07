@@ -1,0 +1,51 @@
+# =====================================================================
+# VigilEye dependencies
+#
+# IMPORTANT: mediapipe 0.10.x is not compatible with numpy >= 2.0.
+# Installing numpy 2 first will produce a cryptic
+# "_ARRAY_API not found" crash on `import mediapipe`.
+# Keep the numpy pin below.
+# =====================================================================
+
+# --- core perception -------------------------------------------------
+numpy>=1.24,<2.0
+opencv-python>=4.8.0
+
+# MediaPipe removed the legacy `mp.solutions` API in the 0.10.2x series.
+# VigilEye supports BOTH APIs and auto-detects which one you have:
+#
+#   Option A (recommended, zero extra setup) - legacy 'solutions' API:
+#       pip install "mediapipe>=0.10.9,<0.10.22"
+#
+#   Option B (current release) - modern 'tasks' API. Works identically,
+#   but needs a one-time model download:
+#       pip install mediapipe
+#       python -m vigileye.landmarks --download
+#
+# Check which backend you have:  python -m vigileye.landmarks
+mediapipe>=0.10.9,<0.10.22
+
+# --- object detection (phone / hands-off-wheel) ----------------------
+ultralytics>=8.1.0
+
+# --- v2 learned fusion model -----------------------------------------
+# CPU-only install (much smaller, fine for training this tiny LSTM):
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.0.0
+
+# --- data / training / evaluation ------------------------------------
+pandas>=2.0.0
+scikit-learn>=1.3.0
+PyYAML>=6.0
+
+# --- dashboard --------------------------------------------------------
+streamlit>=1.30.0
+
+# --- tests ------------------------------------------------------------
+pytest>=7.4.0
+
+# --- optional: audio alerts ------------------------------------------
+# The system degrades gracefully to console alerts if these are absent.
+sounddevice>=0.4.6
+# simpleaudio>=1.0.4      # alternative audio backend
+# pyttsx3>=2.90           # spoken alerts (set alerts.tts: true in config)

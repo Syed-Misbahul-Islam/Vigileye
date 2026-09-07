@@ -1,0 +1,25 @@
+{
+	"folders": [
+		{
+			"path": "../files/vigileye/vigileye/dashboard"
+		},
+		{
+			"path": "../files/vigileye/vigileye/data"
+		},
+		{
+			"path": "../files/vigileye/vigileye/logs"
+		},
+		{
+			"path": "../files/vigileye/vigileye/models"
+		},
+		{
+			"path": "../files/vigileye/vigileye/scripts"
+		},
+		{
+			"path": "../files/vigileye/vigileye/tests"
+		},
+		{
+			"path": "../files/vigileye/vigileye/vigileye"
+		}
+	]
+}

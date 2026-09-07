@@ -1,0 +1,104 @@
+# =====================================================================
+# VigilEye configuration
+# Every threshold in the system lives here. Nothing is hard-coded in the
+# detectors, so you can retune for a new camera / vehicle without
+# touching Python.
+# =====================================================================
+
+camera:
+  source: 0             # 0 = default webcam, or a path to a video file
+  width: 640
+  height: 480
+  fps: 30
+  flip: true            # mirror the image (natural for a driver-facing cam)
+
+face_mesh:
+  max_num_faces: 1
+  refine_landmarks: true      # REQUIRED for iris landmarks (gaze)
+  min_detection_confidence: 0.5
+  min_tracking_confidence: 0.5
+
+eye:
+  ear_threshold: 0.21         # fallback if calibration is disabled
+  use_calibration: true
+  calib_ratio: 0.75           # closed-threshold = calib_ratio * baseline EAR
+  perclos_window_s: 60.0      # PERCLOS is defined over a rolling minute
+  perclos_warn: 0.15
+  perclos_critical: 0.30      # score saturates here
+  blink_min_s: 0.06           # shorter than this = noise, not a blink
+  blink_max_s: 0.50
+  microsleep_s: 0.80          # eyes shut this long = micro-sleep event
+
+mouth:
+  mar_threshold: 0.55
+  use_calibration: true
+  calib_multiplier: 2.2       # yawn-threshold = multiplier * baseline MAR
+  yawn_min_s: 1.2             # mouth must stay open this long to count
+  yawn_window_s: 120.0        # yawn-rate is computed over 2 minutes
+
+head:
+  yaw_threshold_deg: 25.0     # sustained turn => looking away
+  pitch_nod_deg: 15.0         # downward deviation from baseline => nod
+  nod_min_s: 0.5
+  off_road_min_s: 2.0         # head must stay turned this long
+  nod_memory_s: 20.0          # nods within this window feed the score
+
+gaze:
+  h_range: [0.36, 0.64]       # normalised iris position considered "on road"
+  v_range: [0.28, 0.75]
+  window_s: 10.0
+  off_ratio_warn: 0.40        # fraction of window off-road where score = 1
+
+objects:
+  enabled: true
+  model: yolov8n.pt           # auto-downloads on first run
+  conf: 0.35
+  every_n_frames: 5           # run YOLO on 1 of every N frames (edge budget)
+  phone_persist_s: 1.0        # phone must be seen this long to count
+  hands:
+    enabled: true
+    max_num_hands: 2
+    min_detection_confidence: 0.5
+    wheel_roi: [0.20, 0.55, 0.90, 1.00]   # x1,y1,x2,y2 normalised
+    hands_off_min_s: 2.0
+
+fusion:
+  mode: rule                  # rule | temporal | hybrid
+  drowsy_threshold: 0.45
+  distract_threshold: 0.45
+  confirm_frames: 8           # frames above threshold before switching state
+  release_frames: 20          # frames below threshold before returning to ALERT
+  min_state_s: 1.5            # minimum dwell time in a state (anti-flicker)
+  weights:
+    drowsy:
+      perclos: 0.40
+      microsleep: 0.20
+      yawn: 0.20
+      nod: 0.20
+    distract:
+      phone: 0.35
+      gaze: 0.25
+      head: 0.25
+      hands: 0.15
+
+temporal:
+  checkpoint: models/vigileye_lstm.pt
+  window: 30                  # frames per LSTM window (~1 s at 30 fps)
+  blend: 0.5                  # hybrid: weight of the learned model
+
+alerts:
+  enabled: true
+  cooldown_s: 5.0             # min gap between alerts of the same level
+  escalate_s: 8.0             # unresolved state this long => escalate
+  volume: 0.35
+  tts: false                  # spoken alerts via pyttsx3 (optional)
+
+logging:
+  dir: logs
+  frame_log: true             # per-frame CSV (large; disable on edge devices)
+  db: logs/vigileye.db        # SQLite event store used by the dashboard
+  flush_every: 100
+
+calibration:
+  duration_s: 10.0
+  file: calibration.json
